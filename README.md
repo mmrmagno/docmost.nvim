@@ -155,38 +155,6 @@ Paragraphs and headings have IDs that links point at. They never show up in the
 buffer. Extmarks follow them while I edit, so rewording, adding, deleting and moving
 blocks keep the right IDs.
 
-## Things I learned the hard way
-
-**HTTP 200 does not mean saved.** Docmost applies updates through its collaboration
-server and writes them to the database later. The response comes back long before
-that.
-
-**Pandoc turns tabs into spaces**, even inside code blocks, unless you pass
-`--preserve-tabs`. Randomly generated test pages found that one.
-
-**Some things have no Markdown at all.** A line break at the very end of a paragraph
-cannot be written, and neither can an empty paragraph. Both got explicit forms, and
-a lone `\` has to be told apart from an escaped backslash by reading the source,
-because Pandoc parses both the same.
-
-**Pandoc's task lists are unreliable** with this set of extensions. Sometimes
-`- [ ]` becomes a checkbox, sometimes plain text, so the plugin reads the source line
-itself.
-
-**Headless Neovim segfaults** when a status line redraw is forced after changing
-`columns`. It crashes inside `update_screen`, so the plugin only forces redraws when
-a UI is attached.
-
-## Tests
-
-```sh
-python3 tests/run.py
-```
-
-Everything runs against a local HTTP and HTTPS mock with made-up credentials, never
-a real server: sessions, saves and every way they can fail, the page format with
-golden examples and randomly generated documents, and the workspace.
-
 ## What is next
 
 - **Real use on my own instance**, on a scratch page first. So far it has only run
