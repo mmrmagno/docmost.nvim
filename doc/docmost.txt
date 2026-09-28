@@ -1,0 +1,81 @@
+*docmost.txt*  Browse and edit supported Docmost pages from Neovim
+
+                                                               *docmost-setup*
+Requires Neovim 0.10+ and curl, plus Pandoc to preserve block IDs/default alignment.
+Add the plugin to runtimepath, then: >lua
+  require('docmost').setup({ base_url = 'https://docs.example.com' })
+<
+Production requires HTTPS with normal TLS validation. Uses a normal user session;
+no enterprise API key. Internal endpoints vary by Docmost release. The installed
+deployment is not yet live-verified. See README.md for NvChad/lazy.nvim setup.
+
+                                                            *docmost-commands*
+:Docmost login          Email input and a local secret password prompt.
+:Docmost logout         Forget local session; does not revoke browser sessions.
+:Docmost spaces         Select space, page, or children. Load more for pagination.
+:Docmost search [query] Search titles/content using the server search endpoint.
+:Docmost open {id/url}  Open page as a Markdown acwrite buffer.
+:Docmost save           Same save path as :write. Asynchronous; wait for result.
+:Docmost reload         Reload only if local edits/outcomes would not be lost.
+:Docmost! reload        Explicitly discard local edits after a private backup.
+:Docmost diff           Show BASE / LOCAL / REMOTE in a separate diff tab.
+:Docmost cancel         Cancel current page operation; writes may still persist.
+:Docmost status         Validate session and show current buffer save state.
+:Docmost version        Query the optional installed-version endpoint.
+:checkhealth docmost    Local diagnostics; does not create or change pages.
+
+Command completion is available. Title is separate from body. The first heading
+does not rename a page. Buffers are named docmost://host/page-id. Use :write and
+wait before :quit; :wq is not an asynchronous save-and-quit operation.
+
+                                                                *docmost-auth*
+Login cookies are retained in memory by default. Passwords and tokens are sent to
+curl via stdin, never argv or shell expansion. TLS is validated; redirects are
+refused. Do not paste credentials into chat, command history, or source files.
+
+persist_session=true saves an origin-bound session under stdpath('state')/docmost.
+Files are private plaintext (0600); directories are 0700. An external session may
+be provided using session_token=function() return vim.env.DOCMOST_SESSION_TOKEN end
+or session_file='/private/session.json'. The latter contains base_url and token
+fields and must be mode 0600. SSO/MFA browser login flows are not implemented.
+
+                                                             *docmost-safety*
+Saves back up the raw baseline and edit snapshot, compare fresh JSON/Markdown
+against the baseline, update the existing ID, then poll for two stable matching
+reads. HTTP 200 alone never clears modified. Empty Markdown uses empty-paragraph
+JSON and requires structural-empty verification. CRLF is normalized to LF; no
+meaningful whitespace is stripped to force a match.
+
+Edits made during a pending save remain modified. Timeouts and ambiguous results
+retain an uncertain state; another :write only reads to reconcile, never replays
+the update. Use :Docmost diff to inspect differences. Reload cannot discard edits
+without explicit :Docmost! reload, and refuses if new edits arrived during reload.
+
+Unsupported nodes, marks, and attributes make a page read-only. Ordinary block IDs
+and default left alignment are supported through a local Pandoc-to-JSON adapter.
+It validates the original Markdown against the JSON before applying edits, retains
+existing IDs/default attributes, and verifies their persistence. Ambiguous mixed
+text/structural edits are blocked; save those changes separately. Without Pandoc,
+pages needing this adapter remain read-only. Unknown rich content has no override.
+
+One active editor per page is required. Pre-save checks are NOT atomic. Browser
+edits may be unpersisted or arrive during replacement. This is not live Yjs
+collaboration. Repeated endpoint reads do not prove storage durability.
+
+                                                            *docmost-backups*
+Backups: stdpath('state')/docmost/backups/<instance-page-hash>/*.json
+Fields: local_markdown, baseline (JSON, canonical Markdown, metadata), pending.
+Retains 20 records per page by default; backup_retention configures this. Backup
+failure blocks a save. Remote buffers disable swap and persistent undo files.
+Exit/unload backups and same-process recovery preserve normal closing edits;
+this is not a continuous journal against process crashes. See README.md to recover
+a backup's local_markdown into a scratch buffer after restarting Neovim.
+
+                                                            *docmost-testing*
+Run python3 tests/run.py from the repository. It uses local HTTP/HTTPS mocks,
+synthetic credentials, and temporary files; it never contacts production. Python
+3.9+, Neovim, curl, Pandoc, and OpenSSL CLI are required. Mock success does not establish
+deployed server compatibility. Follow README.md's designated-disposable-page
+procedure for live verification; configure all real credentials locally.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
