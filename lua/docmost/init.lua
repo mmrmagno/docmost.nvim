@@ -13,6 +13,9 @@ local commands = {
   'cancel',
   'version',
   'guide',
+  'check',
+  'inspect',
+  'cheatsheet',
 }
 local function report(err, message)
   vim.notify(
@@ -119,6 +122,12 @@ function M.register()
         end
       elseif action == 'cancel' then
         require('docmost.buffer').cancel()
+      elseif action == 'check' then
+        require('docmost.buffer').check()
+      elseif action == 'inspect' then
+        require('docmost.dfm.decorate').inspect()
+      elseif action == 'cheatsheet' then
+        require('docmost.ui').guide('cheatsheet')
       elseif action == 'guide' then
         require('docmost.ui').guide()
       elseif action == 'version' then

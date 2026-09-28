@@ -244,7 +244,7 @@ local function run()
     eq(#writes, 1)
     eq(writes[1].pageId, 'page-1')
     eq(writes[1].title, nil)
-    eq(writes[1].format, 'markdown')
+    eq(writes[1].format, 'json')
     eq(writes[1].operation, 'replace')
     eq(vim.uv.fs_stat(s.backup_path).mode % 512, 384)
     local err, reopened = wait(function(cb)
@@ -267,7 +267,7 @@ local function run()
       return finished
     end, 5))
     eq(save_error, nil)
-    eq(s.baseline.markdown, 'submitted')
+    eq(s.baseline.json.content[1].content[1].text, 'submitted')
     eq(vim.bo[s.buf].modified, true)
     eq(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false), { 'typed during save' })
     eq(#stats().writes, 1)
@@ -284,7 +284,7 @@ local function run()
     assert(buffers.compatibility:match('read%-only'))
     eq(save(s).kind, 'uncertain')
     eq(#stats().writes, 1)
-    control({ mode = 'normal', markdown = 'must survive', generation = 1 })
+    control({ mode = 'normal', document = s.pending.json, generation = 1 })
     eq(save(s), nil)
     eq(s.status, 'verified')
     eq(#stats().writes, 1)
@@ -318,37 +318,127 @@ local function run()
     eq(save(s).kind, 'conflict')
     eq(#stats().writes, 0)
   end)
-  test('rich content, comment anchors, unknown attributes and permissions are read-only', function()
-    for _, mode in ipairs({ 'rich', 'readonly' }) do
-      reset(mode)
-      local s = open()
-      eq(s.baseline.editable, false)
-      eq(vim.bo[s.buf].modifiable, false)
-      vim.bo[s.buf].modifiable = true
-      edit(s, 'force local edit')
-      assert(save(s))
-      eq(#stats().writes, 0)
-    end
-    local function check(node)
-      return fidelity.check({ type = 'doc', content = { node } })
-    end
-    eq(check({ type = 'paragraph', attrs = { surprise = vim.NIL } }), false)
-    eq(
-      check({
-        type = 'paragraph',
-        content = {
-          {
-            type = 'text',
-            text = 'a',
-            marks = { { type = 'comment', attrs = { commentId = 'x' } } },
+  test('rich pages are editable and untouched rich nodes are written back exactly', function()
+    reset()
+    local rich = {
+      type = 'doc',
+      content = {
+        {
+          type = 'paragraph',
+          attrs = { id = 'p1', textAlign = 'left' },
+          content = {
+            { type = 'text', text = 'Intro ' },
+            {
+              type = 'text',
+              text = 'anchored',
+              marks = { { type = 'comment', attrs = { commentId = 'c1', resolved = false } } },
+            },
+            { type = 'mention', attrs = { id = 'u1', label = 'Marcos', entityType = 'user' } },
           },
         },
-      }),
-      false
-    )
-    eq(check({ type = 'hardBreak' }), false)
-    eq(fidelity.local_check('![image](attachment)'), false)
-    eq(fidelity.local_check('```html\n<div>code</div>\n```'), true)
+        {
+          type = 'attachment',
+          attrs = { url = '/files/r.pdf', name = 'report.pdf', attachmentId = 'keep-me', size = 9 },
+        },
+        {
+          type = 'table',
+          content = {
+            {
+              type = 'tableRow',
+              content = {
+                {
+                  type = 'tableCell',
+                  attrs = { colspan = 2, rowspan = 1, colwidth = { 100, 50 } },
+                  content = {
+                    {
+                      type = 'paragraph',
+                      attrs = { id = 'p2' },
+                      content = { { type = 'text', text = 'cell' } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          type = 'callout',
+          attrs = { type = 'info' },
+          content = {
+            {
+              type = 'paragraph',
+              attrs = { id = 'p3' },
+              content = { { type = 'text', text = 'Note' } },
+            },
+          },
+        },
+        {
+          type = 'paragraph',
+          attrs = { id = 'p4', textAlign = 'center' },
+          content = { { type = 'text', text = 'keep  two  spaces' } },
+        },
+        { type = 'futureWidget', attrs = { config = { a = 1 } } },
+      },
+    }
+    control({ document = rich })
+    local s = open()
+    eq(s.baseline.editable, true)
+    eq(vim.bo[s.buf].modifiable, true)
+    local text = table.concat(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false), '\n')
+    assert(text:find('[report.pdf](/files/r.pdf){.attachment', 1, true), text)
+    assert(text:find('[@Marcos]{.mention', 1, true), text)
+    assert(text:find('::: {.callout type="info"}', 1, true), text)
+    local row
+    for i, line in ipairs(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)) do
+      if line == 'Note' then
+        row = i - 1
+      end
+    end
+    vim.api.nvim_buf_set_text(s.buf, row, 4, row, 4, { ' edited in Neovim' })
+    eq(save(s), nil)
+    local write = stats().writes[1]
+    eq(write.format, 'json')
+    local expected = vim.deepcopy(rich)
+    expected.content[4].content[1].content[1].text = 'Note edited in Neovim'
+    eq(write.content, expected)
+    eq(s.status, 'verified')
+    eq(vim.bo[s.buf].modified, false)
+    reset('readonly')
+    s = open()
+    eq(s.baseline.editable, false)
+    eq(vim.bo[s.buf].modifiable, false)
+    vim.bo[s.buf].modifiable = true
+    edit(s, 'force local edit')
+    assert(save(s))
+    eq(#stats().writes, 0)
+  end)
+  test('front matter renames the page separately and after the body', function()
+    reset()
+    local s = open()
+    local lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    eq(lines[1], '---')
+    eq(lines[2], 'title: Title stays separate')
+    lines[2] = 'title: Renamed from Neovim'
+    vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    eq(save(s), nil)
+    local writes = stats().writes
+    eq(#writes, 1)
+    eq(writes[1], { pageId = 'page-1', title = 'Renamed from Neovim' })
+    eq(s.baseline.meta.title, 'Renamed from Neovim')
+    eq(vim.bo[s.buf].modified, false)
+    lines[2] = 'title: Both at once'
+    lines[#lines] = lines[#lines] .. ' and more'
+    vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    eq(save(s), nil)
+    writes = stats().writes
+    eq(#writes, 3)
+    eq(writes[2].format, 'json')
+    eq(writes[3].title, 'Both at once')
+    eq(s.baseline.meta.title, 'Both at once')
+    lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    edit(s, table.concat(vim.list_slice(lines, 5), '\n'))
+    eq(save(s), nil)
+    eq(#stats().writes, 3)
   end)
   test('empty body sends a schema-valid document and verifies structural emptiness', function()
     reset()
@@ -358,7 +448,6 @@ local function run()
     local write = stats().writes[1]
     eq(write.format, 'json')
     eq(write.content, { type = 'doc', content = { { type = 'paragraph' } } })
-    eq(s.baseline.markdown, '')
     eq(fidelity.empty(s.baseline.json), true)
     reset('ignored')
     s = open()
@@ -372,7 +461,7 @@ local function run()
     eq(vim.bo[s.buf].modified, true)
     reset('nullbody')
     s = open()
-    eq(s.baseline.markdown, '')
+    eq(s.baseline.markdown:match('\n\n(.*)$'), '')
     eq(fidelity.empty(s.baseline.json), true)
     reset('missingbody')
     local err = wait(function(cb)
@@ -380,18 +469,60 @@ local function run()
     end)
     eq(err.kind, 'contract')
   end)
-  test(
-    'meaningful whitespace is never normalized away; canonicalization stays uncertain',
-    function()
-      eq(fidelity.normalize('a  \r\n\r\n  code\n'), 'a  \n\n  code\n')
-      reset('canonicalize')
-      local s = open()
-      edit(s, '**new**')
-      eq(save(s).kind, 'uncertain')
-      eq(s.remote.markdown, '__new__')
-      eq(vim.bo[s.buf].modified, true)
-    end
-  )
+  test('a rejected rename after a verified body keeps the title change pending', function()
+    reset()
+    control({ icon = '📄' })
+    local s = open()
+    local lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    eq(lines[3], 'icon: 📄')
+    table.remove(lines, 3)
+    vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    eq(save(s), nil)
+    eq(stats().writes[1], { pageId = 'page-1', icon = '' })
+    eq(vim.bo[s.buf].modified, false)
+    control({ mode = 'renamefail' })
+    lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    lines[2] = 'title: After the body'
+    lines[#lines] = lines[#lines] .. ' changed'
+    vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    eq(save(s).kind, 'rate_limit')
+    local writes = stats().writes
+    eq(#writes, 3)
+    eq(writes[2].format, 'json')
+    eq(vim.bo[s.buf].modified, true)
+    control({ mode = 'normal' })
+    eq(save(s), nil)
+    writes = stats().writes
+    eq(#writes, 4)
+    eq(writes[4], { pageId = 'page-1', title = 'After the body' })
+    eq(vim.bo[s.buf].modified, false)
+  end)
+  test('meaningful whitespace in stored text is kept across unrelated edits', function()
+    eq(fidelity.normalize('a  \r\n\r\n  code\n'), 'a  \n\n  code\n')
+    reset()
+    control({
+      document = {
+        type = 'doc',
+        content = {
+          {
+            type = 'paragraph',
+            content = { { type = 'text', text = '  leading, two  spaces, trailing ' } },
+          },
+          { type = 'codeBlock', content = { { type = 'text', text = '\tindented\n  code\n' } } },
+          { type = 'paragraph', content = { { type = 'text', text = 'edit me' } } },
+        },
+      },
+    })
+    local s = open()
+    local lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    lines[#lines] = 'edited'
+    vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    eq(save(s), nil)
+    local write = stats().writes[1].content
+    eq(write.content[1].content[1].text, '  leading, two  spaces, trailing ')
+    eq(write.content[2].content[1].text, '\tindented\n  code\n')
+    eq(write.content[3].content[1].text, 'edited')
+  end)
   test('HTTP 403 preserves changes without pending ambiguous state', function()
     reset('forbidden')
     local s = open()
@@ -501,7 +632,7 @@ local function run()
     eq(#files, c.backup_retention)
     local data = vim.json.decode(table.concat(vim.fn.readfile(s.backup_path), '\n'))
     eq(data.local_markdown, 'retention 5')
-    eq(data.baseline.markdown, 'retention 4')
+    eq(data.baseline.json.content[1].content[1].text, 'retention 4')
   end)
   test('server-added block IDs remain editable and survive a second save', function()
     reset('newanchor')
@@ -536,6 +667,72 @@ local function run()
     edit(s, '')
     eq(save(s), nil)
     eq(fidelity.empty(s.baseline.json), true)
+  end)
+  test('text edits and new blocks in one save keep every existing block ID', function()
+    reset('anchored')
+    local s = open()
+    local original = vim.deepcopy(s.baseline.json)
+    local lines = vim.api.nvim_buf_get_lines(s.buf, 0, -1, false)
+    local heading, para
+    for i, line in ipairs(lines) do
+      if line == '# Notes' then
+        heading = i - 1
+      elseif line:find('Grüezi', 1, true) then
+        para = i - 1
+      end
+    end
+    vim.api.nvim_buf_set_text(s.buf, heading, 7, heading, 7, { ' and more' })
+    vim.api.nvim_buf_set_lines(s.buf, para, para, false, { 'A brand new paragraph', '' })
+    vim.api.nvim_buf_set_text(s.buf, para + 2, 0, para + 2, #'Grüezi', { 'Hello' })
+    eq(save(s), nil)
+    local written = stats().writes[1].content.content
+    eq(written[1].attrs.id, original.content[1].attrs.id)
+    eq(written[1].content[1].text, 'Notes and more')
+    eq(written[2].attrs, nil)
+    eq(written[3].attrs.id, original.content[2].attrs.id)
+    assert(written[3].content[1].text:find('^Hello'))
+    eq(
+      written[4].content[1].content[1].attrs.id,
+      original.content[3].content[1].content[1].attrs.id
+    )
+  end)
+  test('check reports problems as diagnostics without writing; attributes are concealed', function()
+    reset()
+    local s = open()
+    vim.api.nvim_set_current_buf(s.buf)
+    vim.api.nvim_buf_set_lines(s.buf, -1, -1, false, { '', '[odd]{.glitter}' })
+    local err = wait(function(cb)
+      buffers.check(cb)
+    end)
+    eq(err.kind, 'validation')
+    local diagnostics = vim.diagnostic.get(s.buf)
+    eq(#diagnostics, 1)
+    eq(diagnostics[1].lnum, vim.api.nvim_buf_line_count(s.buf) - 1)
+    assert(diagnostics[1].message:find('glitter', 1, true))
+    eq(save(s).kind, 'validation')
+    eq(#stats().writes, 0)
+    vim.api.nvim_buf_set_lines(s.buf, -2, -1, false, { '[odd]{.underline}' })
+    local e, count = wait(function(cb)
+      buffers.check(cb)
+    end)
+    eq(e, nil)
+    assert(count > 0)
+    eq(#vim.diagnostic.get(s.buf), 0)
+    local decorate = require('docmost.dfm.decorate')
+    local specs = decorate.specs('[odd]{.underline} and [x](https://e.x){target="_blank"}')
+    eq(#specs, 2)
+    eq(specs[1].opts.conceal ~= nil, true)
+    eq(#decorate.specs('![c](/a.png){.image width="1"}'), 1)
+    eq(decorate.media('![c](/a.png){.image width="1"}'), 'image')
+    eq(decorate.media('[f.pdf](/f.pdf){.attachment}'), 'attachment')
+    eq(#decorate.specs('plain text'), 0)
+    local win = vim.api.nvim_get_current_win()
+    vim.wo[win].conceallevel = 0
+    vim.api.nvim_exec_autocmds('BufWinEnter', { buffer = s.buf })
+    eq(vim.wo[win].conceallevel, 2)
+    vim.api.nvim_exec_autocmds('BufWinLeave', { buffer = s.buf })
+    eq(vim.wo[win].conceallevel, 0)
+    eq(#stats().writes, 0)
   end)
   test('same visible Markdown without submitted IDs is never a verified save', function()
     reset('anchored')
@@ -577,12 +774,17 @@ local function run()
     eq(vim.bo[s.buf].modified, true)
     eq(#stats().writes, 2)
   end)
-  test('JSON adapter handles canonical spelling without replaying an unchanged save', function()
+  test('alternative Markdown spelling saves once and never replaces the buffer', function()
     reset('anchored')
     local s = open()
-    edit(s, s.baseline.markdown:gsub('_italic_', '*changed italic*'))
+    edit(s, s.baseline.markdown:gsub('%*italic%*', '_changed italic_'))
     eq(save(s), nil)
-    assert(s.baseline.markdown:find('_changed italic_', 1, true))
+    assert(s.baseline.markdown:find('*changed italic*', 1, true))
+    assert(
+      table
+        .concat(vim.api.nvim_buf_get_lines(s.buf, 0, -1, false), '\n')
+        :find('_changed italic_', 1, true)
+    )
     eq(vim.bo[s.buf].modified, false)
     eq(save(s), nil)
     eq(#stats().writes, 1)

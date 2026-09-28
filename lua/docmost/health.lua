@@ -2,9 +2,9 @@ local M = {}
 function M.check()
   vim.health.start('docmost.nvim')
   if vim.fn.executable('pandoc') == 1 then
-    vim.health.ok('Pandoc available for Markdown saves preserving block IDs')
+    vim.health.ok('Pandoc available; pages open editable')
   else
-    vim.health.warn('Install pandoc to edit pages with block IDs/default alignment')
+    vim.health.error('Install pandoc: without it every page opens read-only')
   end
   if vim.fn.has('nvim-0.10') == 1 then
     vim.health.ok('Neovim >= 0.10')

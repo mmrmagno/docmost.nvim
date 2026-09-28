@@ -29,7 +29,7 @@ state = {}
 def reset():
     state.clear()
     state.update(mode='normal', writes=[], reads=0, trace=[], generation=0, pending=None,
-                 markdown=MARKDOWN, document=copy.deepcopy(DOCUMENT))
+                 markdown=MARKDOWN, document=copy.deepcopy(DOCUMENT), title='Title stays separate', icon=None)
 
 
 reset()
@@ -45,17 +45,17 @@ def render(node):
     """Small independent mock serializer, not the production Markdown parser."""
     kind = node['type']
     children = node.get('content', [])
-    attrs = node.get('attrs', {})
+    attrs = node.get('attrs') or {}
     if kind == 'text':
         text = node['text']
         for mark in node.get('marks', []):
-            delimiter = {'bold': '**', 'italic': '_', 'strike': '~~', 'code': '`'}[mark['type']]
+            delimiter = {'bold': '**', 'italic': '_', 'strike': '~~', 'code': '`'}.get(mark['type'], '')
             text = delimiter + text + delimiter
         return text
     if kind == 'paragraph':
         return ''.join(render(child) for child in children)
     if kind == 'heading':
-        return '#' * attrs['level'] + ' ' + ''.join(render(child) for child in children)
+        return '#' * (attrs or {}).get('level', 1) + ' ' + ''.join(render(child) for child in children)
     if kind == 'codeBlock':
         return '```' + (attrs.get('language') or '') + '\n' + ''.join(render(c) for c in children) + '\n```'
     if kind in ['bulletList', 'orderedList']:
@@ -158,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
                 state['generation'] += 1
             if mode == 'wrongempty':
                 document = copy.deepcopy(DOCUMENT)
-            page = {'id': 'page-1', 'title': 'Title stays separate', 'updatedAt': str(state['generation']), 'spaceId': 'space-1',
+            page = {'id': 'page-1', 'title': state['title'], 'icon': state['icon'], 'updatedAt': str(state['generation']), 'spaceId': 'space-1',
                     'permissions': {'canEdit': mode != 'readonly'},
                     'content': document if body['format'] == 'json' else state['markdown']}
             if mode == 'nullbody':
@@ -170,6 +170,14 @@ class Handler(BaseHTTPRequestHandler):
             if mode == 'forbidden':
                 return self.send({'message': TOKEN}, 403)
             state['writes'].append(body)
+            if 'content' not in body:
+                if mode == 'renamefail':
+                    return self.send({'message': 'slow down'}, 429)
+                if mode != 'ignored':
+                    state['title'] = body.get('title', state['title'])
+                    state['icon'] = body.get('icon', state['icon']) or None
+                    state['generation'] += 1
+                return self.send({'data': {'id': 'page-1'}})
             if mode == 'ignored':
                 return self.send({'data': {'id': 'page-1'}})
             markdown = body['content'] if body['format'] == 'markdown' else render(body['content'])
@@ -213,7 +221,7 @@ def main():
                    NO_PROXY='127.0.0.1', no_proxy='127.0.0.1')
         for kind in ['CONFIG', 'DATA', 'STATE', 'CACHE']:
             env[f'XDG_{kind}_HOME'] = f'{directory}/xdg-{kind.lower()}'
-        for unit in ['tests/markdown.lua', 'tests/layout.lua']:
+        for unit in ['tests/dfm.lua', 'tests/layout.lua']:
             unit_test = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
                                         '-l', str(ROOT / unit)], env=env, cwd=ROOT, timeout=30)
             if unit_test.returncode:

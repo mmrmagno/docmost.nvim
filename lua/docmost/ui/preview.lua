@@ -143,6 +143,8 @@ function M.build(session, row, width, ctx)
       add(g.loading .. ' Loading preview…', 'DocmostBusy')
     end
     if body then
+      local _, rest = require('docmost.dfm').read_front(table.concat(body, '\n'))
+      body = vim.split(rest, '\n', { plain = true })
       local start = #lines
       if #body == 0 or (#body == 1 and body[1] == '') then
         add('(empty page)', 'DocmostDim')
@@ -216,6 +218,9 @@ function M.draw(buf, lines, marks, body_start)
     })
   end
   vim.b[buf].docmost_body_start = body_start
+  if require('docmost.config').get().ui.conceal then
+    require('docmost.dfm.decorate').enable(buf)
+  end
 end
 
 return M

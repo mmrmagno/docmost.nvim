@@ -9,6 +9,8 @@ local root = vim.env.DOCMOST_TEST_DIR
 vim.go.loadplugins = true -- -u NONE disables it; normal NvChad startup enables it.
 vim.opt.rtp:prepend(path)
 local spec = dofile('examples/nvchad.lua')
+spec[1].dir = vim.fn.getcwd()
+spec[1].opts.persist_session = false
 -- The other tests preload runtimepath. Let lazy own it here, as in NvChad.
 vim.opt.rtp:remove(spec[1].dir)
 spec[1].opts.base_url = vim.env.DOCMOST_TEST_URL

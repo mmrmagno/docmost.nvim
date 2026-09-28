@@ -13,6 +13,7 @@ function M.setup(opts)
     backup_retention = 20,
     state_dir = vim.fn.stdpath('state') .. '/docmost',
     persist_session = false,
+    edit_title = true,
     allow_insecure_localhost = false,
     ui = {
       width = 0.9,
@@ -21,6 +22,7 @@ function M.setup(opts)
       icons = 'unicode',
       preview = true,
       winbar = true,
+      conceal = true,
       search_debounce_ms = 250,
       preview_debounce_ms = 150,
     },
@@ -64,7 +66,7 @@ function M.setup(opts)
     c.ui.icons == 'unicode' or c.ui.icons == 'ascii',
     "docmost: ui.icons must be 'unicode' or 'ascii'"
   )
-  for _, key in ipairs({ 'preview', 'winbar' }) do
+  for _, key in ipairs({ 'preview', 'winbar', 'conceal' }) do
     assert(type(c.ui[key]) == 'boolean', 'docmost: ui.' .. key .. ' must be a boolean')
   end
   for _, key in ipairs({ 'search_debounce_ms', 'preview_debounce_ms' }) do

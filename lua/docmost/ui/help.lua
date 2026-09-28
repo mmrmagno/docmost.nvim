@@ -31,6 +31,7 @@ M.sections = {
       { 'R', 'reload a clean page' },
       { 'd', 'diff base, local and remote' },
       { ':Docmost', 'from any page buffer, return here' },
+      { ':Docmost cheatsheet', 'syntax for every kind of Docmost block' },
     },
   },
   {
@@ -46,16 +47,54 @@ M.sections = {
 M.editing = {
   'Editing pages',
   {
-    'Pages open as ordinary Markdown buffers. Use :w to save. Saving is asynchronous: the winbar shows checking, saving, verifying and finally verified once two fresh reads match.',
-    'Supported: headings, paragraphs, bullet and numbered lists, quotes, code blocks, horizontal rules, bold, italic, strikethrough and inline code.',
-    'Adding blocks: write new Markdown blocks separated by a blank line. If you also changed text nearby, save the text first (:w), then add or remove blocks and save again, so existing block IDs stay attached.',
-    'Tables, images, attachments, task lists, callouts and other rich content keep a page read-only. Do not force it with :set modifiable; edit those pages in the browser.',
-    'A # heading changes the body, not the page title. Creating and deleting pages is not supported.',
-    'Close the browser editor for a page before saving it here. Checks run before every write, but they cannot make simultaneous editing safe.',
-    'If a save is uncertain, :w checks again by reading; it never resends. :Docmost diff shows base, local and remote.',
+    'Every page opens as Markdown and :w saves it. Saving is asynchronous: the winbar shows checking, saving, verifying and finally verified once two fresh reads match.',
+    'Plain Markdown covers headings, paragraphs, lists, task lists (- [ ]), quotes, code, tables, links, bold, italic, strikethrough and inline code.',
+    'Everything else uses attributes: [text]{.underline}, [text]{.highlight color="#ff0"}, [@Name]{.mention ...}, ::: {.callout type="info"} blocks, ![caption](src){.image ...}. The {...} parts are hidden until the cursor is on the line.',
+    'Add a block by writing it between blank lines. Copy an existing ::: block to make another of the same kind. Block IDs follow your edits automatically.',
+    'The title: line at the top renames the page. A # heading only changes the body. Creating pages and uploading new files still need the browser.',
+    ':Docmost check marks problems without sending anything. :Docmost inspect shows the construct under the cursor. <C-x><C-o> completes names.',
+    'Close the browser editor for a page before saving it here. If a save is uncertain, :w checks again by reading and never resends.',
     'New to this? Try a disposable page first.',
   },
 }
+
+M.cheatsheet = {
+  { 'Page title', '---  title: New name  ---   (top of the page)' },
+  { 'Bold, italic', '**bold**  *italic*  ~~strike~~  `code`' },
+  { 'Link, new tab', '[text](https://x)   [text](https://x){target="_blank"}' },
+  { 'Underline', '[text]{.underline}' },
+  { 'Highlight', '[text]{.highlight color="#fef08a"}' },
+  { 'Text colour', '[text]{.textStyle color="#e03131"}' },
+  { 'Sub, superscript', '[2]{.subscript}  [2]{.superscript}   or  H~2~O  x^2^' },
+  { 'Math', '$x^2$   and   $$E = mc^2$$ alone on a line' },
+  { 'Line break', 'end the line with \\' },
+  { 'Empty paragraph', 'a line holding only \\' },
+  { 'Task list', '- [ ] todo    - [x] done' },
+  { 'Table', '| a | b |  then  | --- | --- |  then rows' },
+  { 'Callout', '::: {.callout type="warning"}  text  :::' },
+  { 'Details', ':::: details / ::: detailsSummary / ::: detailsContent' },
+  { 'Columns', ':::: columns / ::: column / ::: column' },
+  { 'Centered', '::: {textAlign="center"}  paragraph  :::' },
+  { 'Image', '![caption](url){.image align="center"}' },
+  { 'Embed', '::: {.embed provider="youtube" src="url"}  :::' },
+  { 'Mention, comment', 'copy an existing one; IDs come from Docmost' },
+  { 'Snippets', 'type callout, details, columns, task, highlight, center, math,' },
+  { '', 'image, embed, newtab, mergedtable or table, then Tab through fields' },
+  { 'Tools', ':Docmost check   :Docmost inspect   <C-x><C-o> completes names' },
+}
+
+function M.sheet(width)
+  local lines, marks = { ' CHEATSHEET' }, { { 0, 'DocmostSection' } }
+  for _, entry in ipairs(M.cheatsheet) do
+    local key = string.format('   %-18s', entry[1])
+    lines[#lines + 1] = key .. entry[2]
+    marks[#marks + 1] = { #lines - 1, 'DocmostKey', #key }
+  end
+  lines[#lines + 1] = ''
+  lines[#lines + 1] = ' q closes this panel'
+  marks[#marks + 1] = { #lines - 1, 'DocmostDim' }
+  return lines, marks
+end
 
 local function wrap(text, width, indent)
   local out, line = {}, ''

@@ -1,7 +1,7 @@
 # docmost.nvim
 
-Browse and search a Docmost Community workspace, open pages as Markdown, and save
-supported pages with `:write`. Uses ordinary user sessions and the application's
+Browse and search a Docmost Community workspace, open **every** page as Markdown,
+and save it with `:write`. Uses ordinary user sessions and the application's
 internal endpoints. No enterprise API key, Node helper, or Neovim UI dependency.
 
 **Status:** implemented and tested against local HTTP/HTTPS mocks. Authenticated
@@ -11,30 +11,33 @@ editing real documents. The source contract is pinned to Docmost **0.96.0**, com
 `7bef7b1a00d31991f009865ec14c8d06540eb1f0`; this is not a supported-version claim.
 The endpoint contracts follow the [pinned upstream source](https://github.com/docmost/docmost/tree/7bef7b1a00d31991f009865ec14c8d06540eb1f0).
 
-Ordinary paragraphs/headings with block IDs and default left alignment are editable
-when **Pandoc** is installed (already available on this system). For these pages,
-the plugin parses Markdown locally and sends JSON that retains their IDs and
-attributes. Unsupported rich content remains read-only. Without Pandoc, pages
-requiring that adapter show a dependency explanation instead of risking their IDs.
+Docmost stores pages as structured JSON documents, not Markdown, and its own Markdown
+export drops attachments, mentions, comment anchors, colours, alignment and more.
+So this plugin brings its own lossless dialect: plain Markdown wherever Markdown can
+say it, and Pandoc's attribute syntax (`{...}`, `:::` blocks, `[text]{.class}`) for
+everything else. Every node and attribute has a text form, so pages with tables,
+images, callouts, mentions or blocks the plugin has never seen all open editable.
+Pandoc (installed here) converts your edits back to JSON locally.
 
 ## Installation: NvChad / lazy.nvim
 
-Requires Neovim **0.10+**, `curl`, and **Pandoc** for pages with block IDs/default
-alignment. Tested here with Neovim **0.12.5** and Pandoc **3.10.2**.
+Requires Neovim **0.10+**, `curl`, and **Pandoc** (without it, pages open read-only).
+Tested with Neovim **0.12.5** and Pandoc **3.10.2**. LuaSnip is optional, for snippets.
 Add this entry to the table returned by `~/.config/nvim/lua/plugins/init.lua`:
 
 ```lua
 {
-  dir = '/path/to/docmost.nvim',
+  'mmrmagno/docmost.nvim',
   cmd = 'Docmost',
   opts = {
     base_url = 'https://docs.example.com',
-    persist_session = false,
+    persist_session = true, -- stay signed in across restarts; see below
   },
 },
 ```
 
 [examples/nvchad.lua](examples/nvchad.lua) contains a complete returned spec table.
+For a local checkout, use `dir = '/path/to/docmost.nvim'` instead of the repo name.
 Ordinary Neovim can add this directory to `runtimepath` and call:
 
 ```lua
@@ -177,18 +180,130 @@ is never replaced.
 | `conflict` | The page changed on the server. Nothing was written. `:Docmost diff`, then reload and merge. |
 | `uncertain` | The server did not confirm the save. `:w` checks again by reading and never resends. |
 | `rejected`, `not saved`, `blocked` | Nothing was persisted. The hint explains why; edits are kept. |
-| `read-only` | The page contains something Neovim cannot save safely. The hint names it. |
+| `read-only` | Your account cannot edit the page, Pandoc is missing, or (a bug) the page could not be reproduced exactly. |
+
+### The page format
+
+Each page starts with its title (and icon, if it has one). Change it and `:w` to
+rename the page; the rename is sent separately, after the body, and verified the
+same way. Delete the header if you never want to rename from here.
+
+```markdown
+---
+title: Release plan
+---
+
+# Release plan
+
+Owner [@Marcos]{.mention x-id="u1"}, see [the thread]{.comment commentId="c1"}.
+
+::: {.callout type="warning"}
+Freeze on **Friday**.
+:::
+
+- [x] Tag release
+- [ ] Announce
+
+| Service | Status |
+| --- | --- |
+| api | green |
+
+![Architecture](/files/diagram.png){.image width="600" attachmentId="a1"}
+
+[notes.pdf](/files/notes.pdf){.attachment size="2048" attachmentId="a2"}
+
+::: {textAlign="center"}
+Centered text
+:::
+```
+
+| Docmost content | In the buffer |
+| --- | --- |
+| Headings, paragraphs, lists, quotes, code, rules, bold, italic, strike, code | Plain Markdown |
+| Task lists | `- [ ]` and `- [x]` |
+| Links (with target etc.) | `[text](url){target="_blank"}` |
+| Hard line break | `\` at the end of a line |
+| Empty paragraph | a line holding only `\` |
+| Underline, highlight, colour, sub/superscript, comment anchors | `[text]{.underline}`, `[text]{.highlight color="#ff0"}`, `[text]{.comment commentId="…"}` |
+| Mentions | `[@Name]{.mention x-id="…" entityType="user"}` |
+| Math | `$x^2$` inline, `$$\int x$$` on its own line |
+| Simple tables | Pipe tables |
+| Tables with merged cells or widths | `::: table` / `:::: tableRow` / `::: {.tableCell colspan="2"}` blocks |
+| Images, video, audio, PDF, drawings | `![caption](src){.image …}` (class names the kind) |
+| Attachments | `[name](url){.attachment …}` |
+| Callouts, details, columns, embeds, page breaks, synced blocks, anything new | `::: {.callout type="info"}` … `:::`, named after the Docmost block |
+| Alignment, indentation | a `::: {textAlign="center"}` block around the paragraph |
+
+Attribute values are written as they are stored; `j:` values are encoded JSON and
+`x-id` is Docmost's own `id` attribute. Block IDs of paragraphs and headings never
+appear: the plugin tracks them with extmarks as you edit, so text changes, new
+blocks, deleted blocks and moved blocks all keep the right IDs in one save. The
+`{...}` parts are concealed except on the cursor line, and media lines get a small
+label. `:Docmost inspect` shows the construct under the cursor; `:Docmost check`
+validates the whole buffer and marks problems as diagnostics without sending
+anything. Completion (`<C-x><C-o>`) offers block and style names after `{.` and
+known attribute names after a class.
+
+### Cheatsheet
+
+Also inside Neovim with `:Docmost cheatsheet`.
+
+| Want | Type |
+| --- | --- |
+| Rename the page | edit `title:` in the header at the top |
+| Bold, italic, strike, code | `**bold**` `*italic*` `~~strike~~` `` `code` `` |
+| Link, opening in a new tab | `[text](https://x)` `[text](https://x){target="_blank"}` |
+| Underline | `[text]{.underline}` |
+| Highlight | `[text]{.highlight color="#fef08a"}` |
+| Text colour | `[text]{.textStyle color="#e03131"}` |
+| Sub and superscript | `H~2~O` `x^2^` |
+| Math | `$x^2$` inline, `$$E = mc^2$$` alone on a line |
+| Line break inside a paragraph | end the line with `\` |
+| Empty paragraph | a line holding only `\` |
+| Task list | `- [ ] todo` `- [x] done` |
+| Table | a normal pipe table |
+| Callout | `::: {.callout type="warning"}` text `:::` |
+| Collapsible section | `:::: details` then `::: detailsSummary` and `::: detailsContent` |
+| Columns | `:::: columns` then one `::: column` per column |
+| Centered or right aligned | `::: {textAlign="center"}` paragraph `:::` |
+| Image from a URL | `![caption](https://…){.image align="center"}` |
+| Embed | `::: {.embed provider="youtube" src="https://…"}` `:::` |
+| Mention, comment, attachment | copy an existing one: their IDs come from Docmost |
+
+Blocks with `:::` fences can hold any other blocks, so a callout can contain a
+list or a table. Use more colons on the outer fence when nesting (`::::` around
+`:::`), it keeps them readable.
+
+### Snippets
+
+With LuaSnip (NvChad ships it, together with blink.cmp), page buffers get snippets
+for the syntax above. Type the name, accept it from the completion menu, then
+Tab through the fields. They only appear in Docmost buffers.
+
+| Snippet | Inserts |
+| --- | --- |
+| `callout` | a callout, with the type as a choice |
+| `details` | a collapsible section |
+| `columns` | two columns |
+| `task` | a task item |
+| `highlight`, `underline`, `color` | styled text |
+| `math`, `mathblock` | inline or block math |
+| `center` | an aligned paragraph |
+| `newtab` | a link opening in a new tab |
+| `image`, `embed` | an image or an embed from a URL |
+| `mergedtable` | a table with a merged header cell |
+
+friendly-snippets' Markdown `table` snippets work too; pipe tables are valid pages.
 
 Tips (also in `:Docmost guide`):
 
-- Add blocks by writing new Markdown blocks separated by a blank line. If you also
-  changed text nearby, save the text first, then add or remove blocks and save
-  again, so existing block IDs stay attached.
-- Tables, images, attachments, task lists, callouts and other rich content keep a
-  page read-only. Do not override that with `:set modifiable`; edit those pages in
-  the browser.
-- A `#` heading changes the body, not the page title. Creating pages is not
-  implemented yet.
+- Add a block by writing it, separated by blank lines. Copy an existing `:::` block
+  to make another one of the same kind.
+- New images and attachments need an uploaded file; move, delete or re-caption the
+  existing ones, and upload new ones in the browser for now.
+- Typing two spaces in Markdown gives one; existing multiple spaces are kept.
+- A `#` heading changes the body; the `title:` line renames the page. Creating
+  pages is not implemented yet.
 - Close the browser editor for a page before editing it here, and try a disposable
   page first.
 
@@ -196,6 +311,9 @@ Tips (also in `:Docmost guide`):
 | --- | --- |
 | `:Docmost` / `:Docmost ui` | Open the workspace, or return to it |
 | `:Docmost guide` | Editing tips in a small floating window |
+| `:Docmost check` | Validate the buffer and show problems as diagnostics; sends nothing |
+| `:Docmost inspect` | Show the block or style under the cursor with its attributes |
+| `:Docmost cheatsheet` | The syntax for every kind of block, in a floating window |
 | `:Docmost login` / `logout` | Local session login/logout |
 | `:Docmost spaces` | Choose a space, root page, then open it or browse its children |
 | `:Docmost search [query]` | Search, prompting if no query was provided |
@@ -217,57 +335,41 @@ one final empty batch because the endpoint supplies no total count.
 
 Buffers are named `docmost://<host>/<page-id>`, use `filetype=markdown` and
 `buftype=acwrite`, and remain available when hidden. UUIDs and URL aliases resolve
-to one buffer. Title is metadata (`b:docmost_title`); the first heading does not
-rename a page. Wait for **Save verified by repeated read-back** before quitting.
+to one buffer. The first heading does not rename a page; the `title:` line does. Wait for **Save verified by repeated read-back** before quitting.
 `:write` returns immediately; `:wq` is not an asynchronous save-and-quit operation.
 Use a separate ordinary buffer if you want a local Markdown export.
 
 ## Save behavior and recovery
 
-1. Unchanged content is a no-op. Unsupported JSON nodes, marks, or attributes block
-   writes even if you manually change the buffer's read-only options.
-2. Before sending an update, create a private recovery record with raw JSON,
-   canonical Markdown, metadata, and your edit snapshot. Backup failure blocks the
-   update.
-3. Read JSON, Markdown, then JSON again. Reject inconsistent reads and compare raw
-   content and metadata with the opening baseline. Remote changes block the save;
-   `:Docmost diff` shows all three versions. Metadata-only conflicts can have
-   identical Markdown panes.
-4. Replace content on the **same page ID**, without title or unrelated metadata.
-   Pages with block IDs/default alignment use a JSON adapter described below;
-   other supported pages use Markdown. Empty buffers use `format: "json"` with one
-   empty paragraph; the pinned server skips an empty Markdown string.
-5. Poll fresh reads until the body matches the submitted snapshot in at least two
-   consecutive stable reads. Empty saves also require structurally empty JSON.
-   The default window is 60 seconds to allow collaboration persistence delays.
-   HTTP 200 and update-response content do not count as verification.
-6. Clear `modified` only if changedtick and content still match the submitted
-   snapshot. New edits remain untouched and modified; their baseline advances to
-   the verified version.
+1. Unchanged content is a no-op, including a different Markdown spelling of the
+   same content (`_x_` for `*x*`). Such saves never rewrite your buffer.
+2. The buffer is parsed locally with Pandoc and rebuilt into Docmost JSON. Unknown
+   styles or blocks, broken structure and malformed attributes are reported as
+   diagnostics and nothing is sent.
+3. Before sending an update, create a private recovery record with raw JSON, the
+   page text, metadata, and your edit snapshot. Backup failure blocks the update.
+4. Read the page twice. Reject inconsistent reads and compare content and metadata
+   with the opening baseline. Remote changes block the save; `:Docmost diff` shows
+   all three versions.
+5. Replace content on the **same page ID** with `format: "json"`. A title or icon
+   change follows as its own update once the body is verified.
+6. Poll fresh reads until the stored document matches what was sent in at least
+   two consecutive stable reads: same structure, text and styles, and every
+   attribute that was sent, including block IDs. The server may add IDs and
+   defaults to new blocks and a trailing empty paragraph. The default window is 60
+   seconds to allow collaboration persistence delays. HTTP 200 alone never counts.
+7. Clear `modified` only if changedtick and content still match the submitted
+   snapshot. New edits remain untouched and modified.
 
-For direct Markdown saves, the sole normalization is CRLF → LF; blank lines,
-trailing spaces, code indentation and final newlines are not trimmed. If the
-server rewrites syntax (such as `**bold**` to `__bold__`), those saves conservatively
-remain uncertain. JSON-adapter saves instead verify the parsed document's structure,
-text, formatting, and submitted attributes, including block IDs. Canonical Markdown
-spelling can differ without causing repeated writes or replacing your buffer.
-
-The JSON adapter uses Pandoc's [GFM reader and JSON AST](https://pandoc.org/MANUAL.html#general-options)
-over stdin, asynchronously and without remote conversion requests. It first checks
-that the original Markdown represents the original JSON's supported structure and
-text. It retains existing IDs/default attributes when mapping edited blocks, keeps
-invisible trailing empty paragraphs, and supports unambiguous insertions, deletions,
-and pure block reorders. Deleting a block deliberately also deletes its ID. New
-blocks may receive IDs from Docmost later. A new edit that both changes text and
-adds/removes blocks in the same ambiguous region is blocked; save those changes
-separately. Rich constructs the adapter cannot represent are rejected before any
-update. This is not a general-purpose lossless Docmost converter.
+Opening a page runs the reverse check first: the page text must convert back to
+exactly the stored JSON. When the readable form of a block cannot, that block is
+written in a more explicit form instead (for example `[x]{.bold}` rather than
+`**x**`). Only if even that fails does the page open read-only, naming the block.
 
 Timeouts and ambiguous update failures retain the submitted snapshot. Repeating
 `:write` then **only reads to reconcile**, never resends the update. If repeated
 reads still show the old body, new writes are blocked for this Neovim session with
-an HTTP compatibility message. Inspect the deployed version and adapter needs
-before attempting further replacements. There is no delete/recreate fallback.
+an HTTP compatibility message. There is no delete/recreate fallback.
 
 For a conflict, copy the desired changes from the LOCAL diff, return to the page
 buffer, run `:Docmost! reload`, and merge onto the new baseline. For an uncertain
@@ -293,19 +395,12 @@ sent can complete after cancellation or quitting; inspect remote state on reopen
 
 ## Fidelity and concurrency limits
 
-The fixture-tested candidate subset includes paragraphs, headings, blockquotes,
-ordinary ordered/bullet lists, fenced code, horizontal rules, and bold/italic/strike/
-inline-code marks, with only the explicit attributes in `fidelity.lua`. Unicode is
-preserved. Fixtures exercise plugin behavior; they do not prove the deployed
-server's converter is lossless.
-
-Read-only cases include inline comments, links with mark
-metadata, attachments, images, mentions, tables, task lists, embeds, diagrams,
-math, footnotes, custom alignment/indentation, hard breaks, unknown attributes,
-and server-denied edit permission. Default left alignment and block IDs are
-preserved by the JSON adapter. The local Markdown check rejects obvious new
-rich constructs but is not a full parser. A server-generated unsupported structure
-makes the next baseline read-only. There is no force-write fidelity override.
+The format is tested with golden examples of every construct above, randomly
+generated documents full of Markdown-significant characters, and edits through a
+real buffer. It has not yet been run against real pages from the deployed server;
+node types and attributes follow the pinned upstream schema. Unknown future blocks
+still round-trip in the generic `:::` form. Uploading new images and attachments
+and choosing new mentions still need the browser.
 
 Use **one active editor per page**. Close the web editor and allow its changes to
 persist before opening a page in Neovim. Pre-save comparison is not atomic: browser
@@ -314,8 +409,8 @@ internal update DTO has no known expected-revision field. Repeated read-back is
 evidence of persisted endpoint state, not a storage-durability guarantee or live
 collaboration protocol. Simultaneous browser editing is not safe.
 
-Creation/deletion, renaming, uploads, multi-instance sessions, SSO/MFA flows, and
-live Yjs collaboration are not implemented. No minimum compatible Docmost release
+Page creation/deletion, uploads, multi-instance sessions, SSO/MFA flows, and live
+Yjs collaboration are not implemented. No minimum compatible Docmost release
 is established. Older releases may accept an update without changing its body.
 
 ## Configuration defaults
@@ -333,6 +428,7 @@ require('docmost').setup({
   backup_retention = 20, -- per page, at least one
   state_dir = vim.fn.stdpath('state') .. '/docmost',
   persist_session = false,
+  edit_title = true, -- title/icon header at the top of each page
   ui = {
     width = 0.9, -- fraction of the screen, or cells
     height = 0.86,
@@ -340,6 +436,7 @@ require('docmost').setup({
     icons = 'unicode', -- plain geometric characters; 'ascii' for any font
     preview = true, -- false: no remote reads for the preview pane
     winbar = true, -- page state in page windows
+    conceal = true, -- hide {...} attribute parts off the cursor line
     search_debounce_ms = 250,
     preview_debounce_ms = 150,
   },
@@ -359,19 +456,18 @@ scheme styles them; override them after your colour scheme loads.
 
 ## Tests and live verification
 
-Validation on 2026-09-28: **188 HTTP/HTTPS integration assertions, 38 real-Pandoc
-adapter assertions, 29 layout assertions and 166 workspace assertions passed** on
-Neovim 0.12.5, including TLS rejection/trust checks and saves retaining block IDs.
-The local spec also loaded successfully using the installed lazy.nvim 11.17.5,
-including configuration, command, highlights and help. The workspace was also
-inspected rendered in a real terminal at several sizes, in ASCII mode, and inside
-NvChad. StyLua checks and local health/help checks passed. No production
-compatibility is claimed.
+Validation on 2026-09-28: **235 HTTP/HTTPS integration assertions, 230 page-format
+assertions (golden examples, 60 random documents, buffer edits and every snippet,
+with real Pandoc), 29 layout assertions and 166 workspace assertions passed** on
+Neovim 0.12.5. The example spec loaded through an installed lazy.nvim, and the
+snippets were checked in NvChad's blink.cmp menu. Rich pages were inspected
+rendered in a real terminal. StyLua checks passed. No production compatibility is
+claimed.
 
 Run the loopback-only suite (Neovim, curl, Pandoc, Python 3.9+, and OpenSSL CLI required):
 
 ```sh
-cd /path/to/docmost.nvim
+cd docmost.nvim
 python3 tests/run.py
 ```
 
@@ -390,7 +486,9 @@ failures.
 The mock is **not a full Markdown/Yjs implementation**.
 
 To also exercise the example using an already installed lazy.nvim (no downloads),
-set `DOCMOST_TEST_LAZY_PATH` to its checkout directory when running the suite.
+set `DOCMOST_TEST_LAZY_PATH` to its checkout directory when running the suite. Set
+`DOCMOST_TEST_LUASNIP_PATH` to a LuaSnip checkout to check that every snippet
+expands to a valid page.
 All Neovim config/data/state/cache paths used by the tests are temporary.
 
 Optional live smoke check:
@@ -401,16 +499,19 @@ Optional live smoke check:
 2. Designate a disposable page by URL/ID, created manually in the browser if needed.
    Close its browser editor, wait for persistence, and open **only that page** with
    `:Docmost open <url>`. Do not test writes on normal documents.
-3. If read-only, record the displayed reason and stop the write check. Do not strip
-   anchors or force-enable writes. That page needs a fidelity adapter first.
+3. If read-only, record the displayed reason and stop the write check. Do not
+   force-enable writes.
 4. Otherwise replace its body with a unique plain marker such as
    `docmost.nvim smoke 2026-09-28 <your-random-suffix>` and `:write`. Record verification
    result and elapsed time. Reload, close/reopen the Neovim page, and confirm the
    same page ID and marker in a fresh browser view.
-5. Clear the buffer and `:write` again. Verify emptiness after reopening. If a save
-   is blocked by another unsupported structure, record the exact reason; do not
-   bypass the fidelity gate. IDs/default alignment alone should no longer block it.
-6. Record version, disposable page identity, timing, marker/empty-body outcomes,
+5. In the browser, add rich content to the same page (a table with merged cells,
+   an image, an attachment, a callout, a mention, a comment, centered text). Close
+   the browser editor, reopen in Neovim, change one sentence, `:w`, then check in a
+   fresh browser view that everything else is untouched and comments still anchor.
+6. Change the `title:` line, `:w`, and confirm the rename in the browser.
+7. Clear the buffer body and `:write` again. Verify emptiness after reopening.
+8. Record version, disposable page identity, timing, marker/empty-body outcomes,
    and any read-only reason. No other pages need modification. Inspect any failed
    or uncertain outcome before retrying or restoring content.
 

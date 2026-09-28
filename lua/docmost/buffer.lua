@@ -1,6 +1,8 @@
 local M = { states = {}, opening = {}, compatibility = 'unverified' }
 local api = require('docmost.api')
-local fidelity = require('docmost.fidelity')
+local dfm = require('docmost.dfm')
+local identity = require('docmost.dfm.identity')
+local diagnostics = vim.api.nvim_create_namespace('DocmostValidation')
 local function valid(s)
   return s.buf and vim.api.nvim_buf_is_valid(s.buf) and vim.api.nvim_buf_is_loaded(s.buf)
 end
@@ -66,6 +68,7 @@ local function attach(s, markdown, modified, target_win)
   vim.bo[buf].readonly = not s.baseline.editable
   vim.bo[buf].modifiable = s.baseline.editable or modified or false
   vim.b[buf].docmost_title = s.baseline.meta.title
+  require('docmost.dfm.decorate').attach(buf)
   vim.api.nvim_create_autocmd('BufWriteCmd', {
     buffer = buf,
     callback = function(args)
@@ -83,6 +86,7 @@ local function attach(s, markdown, modified, target_win)
     buffer = buf,
     callback = function()
       s.snapshot = content(s)
+      s.detached_entries = identity.collect(s)
       s.detached_modified = vim.bo[buf].modified
       if s.detached_modified or s.pending or s.busy then
         if not backup(s, s.snapshot) then
@@ -94,6 +98,47 @@ local function attach(s, markdown, modified, target_win)
   if vim.api.nvim_win_is_valid(target_win) then
     vim.api.nvim_win_set_buf(target_win, buf)
   end
+end
+
+local function prepare(page, cb)
+  return dfm.load(page, function(err, loaded)
+    if err then
+      if err.kind == 'dependency' then
+        page.editable, page.reason = false, err.message
+        page.anchors, page.tail = {}, select(2, dfm.split_tail(page.json))
+        cb(nil, page)
+        return
+      end
+      cb(err)
+      return
+    end
+    page.markdown, page.anchors, page.tail = loaded.text, loaded.anchors, loaded.tail
+    if not loaded.editable then
+      page.editable, page.reason = false, page.reason or loaded.reason
+    end
+    cb(nil, page)
+  end)
+end
+
+local function problems(s, errors)
+  if not valid(s) then
+    return
+  end
+  local items = {}
+  for _, e in ipairs(errors or {}) do
+    items[#items + 1] = {
+      lnum = math.min(e.row, vim.api.nvim_buf_line_count(s.buf) - 1),
+      col = 0,
+      severity = vim.diagnostic.severity.ERROR,
+      message = e.message,
+      source = 'docmost',
+    }
+  end
+  if #items == 0 and not s.problems then
+    return
+  end
+  s.problems = #items > 0
+  vim.diagnostic.set(diagnostics, s.buf, items)
 end
 
 function M.open(input, cb)
@@ -119,6 +164,7 @@ function M.open(input, cb)
       return true
     elseif s.detached_modified or s.pending then
       attach(s, s.snapshot, true, target_win)
+      identity.attach(s, s.detached_entries)
     else
       if s.buf and vim.api.nvim_buf_is_valid(s.buf) then
         vim.api.nvim_buf_delete(s.buf, { force = true })
@@ -137,37 +183,67 @@ function M.open(input, cb)
   end
   M.opening[id] = true
   api.read(id, function(err, page)
-    M.opening[id] = nil
     if err then
+      M.opening[id] = nil
       cb(err)
       return
     end
-    if M.states[page.id] and reuse(M.states[page.id]) then
-      return
-    end
-    local s = { id = page.id, baseline = page }
-    M.states[s.id] = s
-    attach(s, page.markdown, false, target_win)
-    set(s, 'opened')
-    if not page.editable then
-      notify('Read-only: ' .. require('docmost.status').explain(page.reason), vim.log.levels.WARN)
-    end
-    cb(nil, s)
+    prepare(page, function(load_error)
+      M.opening[id] = nil
+      if load_error then
+        cb(load_error)
+        return
+      end
+      if M.states[page.id] and reuse(M.states[page.id]) then
+        return
+      end
+      local s = { id = page.id, baseline = page, tail = page.tail }
+      M.states[s.id] = s
+      attach(s, page.markdown, false, target_win)
+      identity.attach(s, page.anchors)
+      set(s, 'opened')
+      if not page.editable then
+        notify('Read-only: ' .. require('docmost.status').explain(page.reason), vim.log.levels.WARN)
+      end
+      cb(nil, s)
+    end)
   end)
 end
 
-local function verified(s, remote, snapshot, tick)
+local function regate(s, remote)
+  prepare(vim.deepcopy(remote), function(err, page)
+    if err or s.baseline ~= remote then
+      return
+    end
+    remote.markdown, remote.tail = page.markdown, page.tail
+    if not page.editable then
+      remote.editable, remote.reason = false, page.reason
+      if valid(s) then
+        vim.bo[s.buf].readonly = true
+        vim.bo[s.buf].modifiable = vim.bo[s.buf].modified
+      end
+      notify('Saved page is now read-only: ' .. remote.reason, vim.log.levels.WARN)
+    end
+  end)
+end
+
+local function verified(s, remote, snapshot, tick, pending, partial)
   s.baseline, s.pending, s.remote = remote, nil, nil
-  s.saved_snapshot = snapshot
+  s.saved_snapshot = not partial and snapshot or nil
+  s.tail = select(2, dfm.split_tail(remote.json))
   M.compatibility = 'HTTP body persistence observed'
+  regate(s, remote)
   if valid(s) then
     local unchanged = vim.api.nvim_buf_get_changedtick(s.buf) == tick and content(s) == snapshot
-    -- Never replace the buffer here, including on server canonicalization.
-    vim.bo[s.buf].modified = not unchanged
+    vim.bo[s.buf].modified = partial or not unchanged
     vim.bo[s.buf].readonly = not remote.editable
     vim.bo[s.buf].modifiable = remote.editable or vim.bo[s.buf].modified
+    vim.b[s.buf].docmost_title = remote.meta.title
+    if unchanged and pending and pending.json and pending.positions then
+      identity.reanchor(s, pending.json, pending.positions, remote.json)
+    end
   else
-    s.detached_modified = s.snapshot ~= snapshot
+    s.detached_modified = partial or s.snapshot ~= snapshot
   end
   set(s, 'verified')
   if not remote.editable then
@@ -175,7 +251,76 @@ local function verified(s, remote, snapshot, tick)
   end
 end
 
-local function verify(s, done)
+local watched = { 'id', 'title', 'icon', 'spaceId', 'parentPageId', 'deletedAt' }
+
+function M.field(value)
+  if type(value) ~= 'string' then
+    return ''
+  end
+  return vim.trim(value)
+end
+
+local function persisted(pending, remote)
+  if pending.kind == 'title' then
+    if not vim.deep_equal(remote.json, pending.before.json) then
+      return false
+    end
+    for key, value in pairs(pending.fields) do
+      if M.field(remote.meta[key]) ~= M.field(value) then
+        return false
+      end
+    end
+    for _, key in ipairs({ 'id', 'spaceId', 'parentPageId', 'deletedAt' }) do
+      if not vim.deep_equal(remote.meta[key], pending.before.meta[key]) then
+        return false
+      end
+    end
+    return true
+  end
+  if not dfm.matches(pending.json, remote.json) then
+    return false
+  end
+  for _, key in ipairs(watched) do
+    if not vim.deep_equal(remote.meta[key], pending.before.meta[key]) then
+      return false
+    end
+  end
+  return true
+end
+
+local verify
+
+local function rename(s, fields, snapshot, tick, done)
+  s.pending =
+    { kind = 'title', fields = fields, before = s.baseline, markdown = snapshot, tick = tick }
+  if not backup(s, content(s)) then
+    s.pending = nil
+    done(fail('Could not record pending rename; nothing was sent'))
+    return
+  end
+  set(s, 'saving')
+  s.request = api.rename(s.id, fields, function(update_error)
+    if
+      update_error
+      and (
+        update_error.status == 400
+        or update_error.status == 401
+        or update_error.status == 403
+        or update_error.status == 404
+        or update_error.status == 429
+      )
+    then
+      s.pending = nil
+      set(s, 'save rejected')
+      done(update_error)
+      return
+    end
+    set(s, 'verifying')
+    verify(s, done)
+  end)
+end
+
+verify = function(s, done)
   local c, uv = require('docmost.config').get(), vim.uv or vim.loop
   local deadline = uv.hrtime() / 1e6 + c.verify_timeout_ms
   local matches, previous = 0, nil
@@ -209,7 +354,11 @@ local function verify(s, done)
     end
     local remaining = deadline - uv.hrtime() / 1e6
     if remaining <= 0 then
-      if s.remote and s.remote.markdown == pending.before.markdown then
+      if
+        s.remote
+        and vim.deep_equal(s.remote.json, pending.before.json)
+        and pending.kind ~= 'title'
+      then
         M.compatibility = 'read-only: HTTP body update not observed'
       end
       uncertain()
@@ -228,25 +377,23 @@ local function verify(s, done)
         matches = 0
       else
         s.remote = remote
-        local body_matches = remote.markdown == pending.markdown
-        if pending.json then
-          body_matches = require('docmost.markdown').matches(pending.json, remote.json)
-        end
-        if pending.markdown == '' then
-          body_matches = body_matches and fidelity.empty(remote.json)
-        end
-        -- A title/parent/space change during the write is a conflict, even if
-        -- Markdown happens to match. updatedAt is expected to change.
-        for _, key in ipairs({ 'id', 'title', 'spaceId', 'parentPageId', 'deletedAt' }) do
-          if not vim.deep_equal(remote.meta[key], pending.before.meta[key]) then
-            body_matches = false
-          end
-        end
-        if body_matches then
+        if persisted(pending, remote) then
           matches = previous and api.same(previous, remote) and (matches + 1) or 1
           previous = remote
           if matches >= c.verify_reads then
-            verified(s, remote, pending.markdown, pending.tick)
+            local follow = pending.kind ~= 'title' and pending.rename
+            verified(
+              s,
+              remote,
+              pending.markdown,
+              pending.tick,
+              pending,
+              follow ~= nil and follow ~= false
+            )
+            if follow then
+              rename(s, follow, pending.markdown, pending.tick, done)
+              return
+            end
             done(nil, remote)
             return
           end
@@ -258,6 +405,25 @@ local function verify(s, done)
     end, { timeout_ms = math.max(1, math.min(c.timeout_ms, math.floor(remaining / 3))) })
   end
   poll()
+end
+
+local function renamed(s, fields)
+  if not fields then
+    return nil
+  end
+  local out, changed = {}, false
+  for _, key in ipairs({ 'title', 'icon' }) do
+    local value = fields[key]
+    local current = s.baseline.meta[key]
+    if key == 'icon' and value == nil then
+      value = type(current) == 'string' and '' or nil
+    end
+    if value ~= nil and M.field(value) ~= M.field(current) then
+      out[key] = value
+      changed = true
+    end
+  end
+  return changed and out or nil
 end
 
 function M.save(buf, cb)
@@ -303,6 +469,7 @@ function M.save(buf, cb)
   local snapshot = content(s)
   if snapshot == s.baseline.markdown or snapshot == s.saved_snapshot then
     vim.bo[s.buf].modified = false
+    problems(s, {})
     cb(nil, 'noop')
     return
   end
@@ -314,104 +481,123 @@ function M.save(buf, cb)
     cb(fail(M.compatibility .. '; validate server compatibility before reopening Neovim'))
     return
   end
-  local supported, reason = fidelity.local_check(snapshot)
-  if not supported then
-    cb(fail(reason))
-    return
-  end
   local tick = vim.api.nvim_buf_get_changedtick(s.buf)
   if not backup(s, snapshot) then
     cb(fail('Private backup failed; save was not sent'))
     return
   end
   s.busy, s.snapshot = true, snapshot
-  set(s, 'checking remote')
   local function done(err, result)
     s.busy, s.request = false, nil
     cb(err, result)
   end
-  local function preflight(prepared)
-    set(s, 'checking remote')
-    s.request = api.read(s.id, function(err, remote)
+  local entries = identity.collect(s)
+  local previous_status = s.status
+  set(s, 'parsing Markdown')
+  s.request = dfm.build(
+    snapshot,
+    entries,
+    s.baseline.json,
+    s.tail,
+    function(err, doc, fields, positions)
       if s.cancelled then
-        set(s, 'preflight cancelled')
         done(fail('Save cancelled before update', 'cancelled'))
         return
       end
       if err then
-        set(s, 'preflight failed')
+        if err.kind == 'validation' then
+          problems(s, err.errors)
+          set(s, 'conversion blocked')
+        else
+          set(s, 'preflight failed')
+        end
         done(err)
         return
       end
-      if not api.same(s.baseline, remote) then
-        s.remote = remote
-        set(s, 'conflict')
-        done(
-          fail(
-            'Remote page changed; save blocked. Use :Docmost diff for base/local/remote, then explicitly reload and merge.',
-            'conflict'
-          )
-        )
-        return
-      end
+      problems(s, {})
       if not valid(s) then
         done(fail('Buffer closed before update; nothing was written'))
         return
       end
-      s.pending = { markdown = snapshot, tick = tick, before = s.baseline, json = prepared }
-      set(s, 'saving')
-      if not backup(s, content(s)) then
-        s.pending = nil
-        done(fail('Could not record pending write; save was not sent'))
+      local title = renamed(s, fields)
+      local body = not dfm.equal(doc, s.baseline.json)
+      if not body and not title then
+        s.saved_snapshot = snapshot
+        if vim.api.nvim_buf_get_changedtick(s.buf) == tick then
+          vim.bo[s.buf].modified = false
+        end
+        set(s, previous_status)
+        done(nil, 'noop')
         return
       end
-      s.request = api.update(s.id, snapshot, function(update_error)
-        -- Definitive rejection cannot have persisted. Network errors and 5xx can.
-        if
-          update_error
-          and (
-            update_error.status == 400
-            or update_error.status == 401
-            or update_error.status == 403
-            or update_error.status == 404
-            or update_error.status == 429
+      set(s, 'checking remote')
+      s.request = api.read(s.id, function(read_error, remote)
+        if s.cancelled then
+          set(s, 'preflight cancelled')
+          done(fail('Save cancelled before update', 'cancelled'))
+          return
+        end
+        if read_error then
+          set(s, 'preflight failed')
+          done(read_error)
+          return
+        end
+        if not api.same(s.baseline, remote) then
+          s.remote = remote
+          set(s, 'conflict')
+          done(
+            fail(
+              'Remote page changed; save blocked. Use :Docmost diff for base/local/remote, then explicitly reload and merge.',
+              'conflict'
+            )
           )
-        then
+          return
+        end
+        if not valid(s) then
+          done(fail('Buffer closed before update; nothing was written'))
+          return
+        end
+        if not body then
+          rename(s, title, snapshot, tick, done)
+          return
+        end
+        s.pending = {
+          kind = 'body',
+          markdown = snapshot,
+          tick = tick,
+          before = s.baseline,
+          json = doc,
+          positions = positions,
+          rename = title,
+        }
+        set(s, 'saving')
+        if not backup(s, content(s)) then
           s.pending = nil
-          set(s, 'save rejected')
-          done(update_error)
+          done(fail('Could not record pending write; save was not sent'))
           return
         end
-        set(s, 'verifying')
-        verify(s, done)
-      end, prepared)
-    end)
-  end
-  local markdown = require('docmost.markdown')
-  if markdown.needed(s.baseline.json) then
-    set(s, 'parsing Markdown')
-    s.request = markdown.parse(s.baseline.markdown, function(base_error, parsed_base)
-      if base_error or s.cancelled or not valid(s) then
-        done(base_error or fail('Save cancelled before update', 'cancelled'))
-        return
-      end
-      s.request = markdown.parse(snapshot, function(edit_error, parsed_edit)
-        if edit_error or s.cancelled or not valid(s) then
-          done(edit_error or fail('Save cancelled before update', 'cancelled'))
-          return
-        end
-        local prepared, reason = markdown.prepare(s.baseline, parsed_base, parsed_edit)
-        if not prepared then
-          set(s, 'conversion blocked')
-          done(fail(reason, 'fidelity'))
-          return
-        end
-        preflight(prepared)
+        s.request = api.update(s.id, doc, function(update_error)
+          if
+            update_error
+            and (
+              update_error.status == 400
+              or update_error.status == 401
+              or update_error.status == 403
+              or update_error.status == 404
+              or update_error.status == 429
+            )
+          then
+            s.pending = nil
+            set(s, 'save rejected')
+            done(update_error)
+            return
+          end
+          set(s, 'verifying')
+          verify(s, done)
+        end)
       end)
-    end)
-  else
-    preflight()
-  end
+    end
+  )
 end
 
 function M.reload(force, cb)
@@ -447,7 +633,7 @@ function M.reload(force, cb)
   local tick = vim.api.nvim_buf_get_changedtick(s.buf)
   s.busy = true
   s.cancelled = false
-  s.request = api.read(s.id, function(err, remote)
+  local function finish(err, remote)
     s.busy, s.request = false, nil
     if s.cancelled then
       cb(fail('Reload cancelled', 'cancelled'))
@@ -472,10 +658,46 @@ function M.reload(force, cb)
     vim.bo[s.buf].modified, vim.bo[s.buf].readonly, vim.bo[s.buf].modifiable =
       false, not remote.editable, remote.editable
     s.baseline, s.pending, s.remote, s.snapshot = remote, nil, nil, remote.markdown
-    s.saved_snapshot, s.last_error = nil, nil
+    s.saved_snapshot, s.last_error, s.tail = nil, nil, remote.tail
+    identity.attach(s, remote.anchors)
+    problems(s, {})
     vim.b[s.buf].docmost_title = remote.meta.title
     set(s, 'reloaded')
     cb(nil, remote)
+  end
+  s.request = api.read(s.id, function(err, remote)
+    if err or s.cancelled then
+      finish(err)
+      return
+    end
+    s.request = prepare(remote, finish)
+  end)
+end
+
+function M.check(cb)
+  cb = cb
+    or function(err, count)
+      if err then
+        notify(require('docmost.status').explain(err.message), vim.log.levels.ERROR)
+      else
+        notify('No problems found in ' .. count .. ' blocks; nothing was sent')
+      end
+    end
+  local s = M.current()
+  if not s then
+    cb(fail('Not a Docmost buffer'))
+    return
+  end
+  dfm.build(content(s), identity.collect(s), s.baseline.json, s.tail, function(err, doc)
+    if err then
+      if err.kind == 'validation' then
+        problems(s, err.errors)
+      end
+      cb(err)
+      return
+    end
+    problems(s, {})
+    cb(nil, #doc.content)
   end)
 end
 

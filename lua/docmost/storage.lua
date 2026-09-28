@@ -66,9 +66,19 @@ function M.backup(state, snapshot)
     vim.json.encode({
       base_url = c.base_url,
       page_id = state.id,
-      baseline = state.baseline,
+      baseline = state.baseline and {
+        json = state.baseline.json,
+        markdown = state.baseline.markdown,
+        meta = state.baseline.meta,
+      },
       local_markdown = snapshot,
-      pending = state.pending,
+      pending = state.pending and {
+        kind = state.pending.kind,
+        json = state.pending.json,
+        fields = state.pending.fields,
+        rename = state.pending.rename,
+        markdown = state.pending.markdown,
+      },
       timestamp = os.time(),
     })
   )

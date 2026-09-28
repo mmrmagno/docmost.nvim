@@ -18,6 +18,8 @@ local links = {
   DocmostHeading = 'Title',
   DocmostWinbar = 'WinBar',
   DocmostPromptPrefix = 'Special',
+  DocmostFence = 'Comment',
+  DocmostAttrs = 'Comment',
 }
 
 local applied = {}

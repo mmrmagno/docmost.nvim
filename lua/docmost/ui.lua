@@ -79,6 +79,8 @@ local function style(win, list)
   vim.wo[win].cursorline = list
   vim.wo[win].spell, vim.wo[win].list = false, false
   vim.wo[win].sidescrolloff, vim.wo[win].scrolloff = 0, list and 2 or 0
+  vim.wo[win].conceallevel = (not list and config().ui.conceal) and 2 or 0
+  vim.wo[win].concealcursor = 'nc'
   vim.wo[win].winhighlight = table.concat({
     'Normal:DocmostNormal',
     'NormalFloat:DocmostNormal',
@@ -1178,8 +1180,14 @@ end
 
 local function help_window(only_editing, zindex)
   local c = config().ui
-  local width = math.max(20, math.min(72, vim.o.columns - 4))
-  local lines, marks = require('docmost.ui.help').build(width, only_editing)
+  local width = math.max(20, math.min(80, vim.o.columns - 4))
+  local help = require('docmost.ui.help')
+  local lines, marks
+  if only_editing == 'cheatsheet' then
+    lines, marks = help.sheet(width)
+  else
+    lines, marks = help.build(width, only_editing)
+  end
   local widest = 0
   for _, line in ipairs(lines) do
     widest = math.max(widest, vim.fn.strdisplaywidth(line))
@@ -1209,7 +1217,8 @@ local function help_window(only_editing, zindex)
     zindex = zindex,
   }
   if c.border ~= 'none' then
-    geometry.title = { { only_editing and ' editing guide ' or ' help ', 'DocmostBrand' } }
+    local names = { cheatsheet = ' cheatsheet ', [true] = ' editing guide ' }
+    geometry.title = { { names[only_editing] or ' help ', 'DocmostBrand' } }
     geometry.title_pos = 'left'
   end
   local win = vim.api.nvim_open_win(buf, true, geometry)
@@ -1240,13 +1249,14 @@ function M.help(only_editing)
   end
 end
 
-function M.guide()
+function M.guide(mode)
+  mode = mode or true
   if M.state and alive(M.state) then
-    M.help(true)
+    M.help(mode)
     return
   end
   local origin = vim.api.nvim_get_current_win()
-  local win, buf = help_window(true, 60)
+  local win, buf = help_window(mode, 60)
   for _, lhs in ipairs({ 'q', '?', '<Esc>' }) do
     vim.keymap.set('n', lhs, function()
       if win_ok(win) then
