@@ -9,6 +9,8 @@ local root = vim.env.DOCMOST_TEST_DIR
 vim.go.loadplugins = true -- -u NONE disables it; normal NvChad startup enables it.
 vim.opt.rtp:prepend(path)
 local spec = dofile('examples/nvchad.lua')
+-- The other tests preload runtimepath. Let lazy own it here, as in NvChad.
+vim.opt.rtp:remove(spec[1].dir)
 spec[1].opts.base_url = vim.env.DOCMOST_TEST_URL
 spec[1].opts.allow_insecure_localhost = true
 spec[1].opts.state_dir = root .. '/lazy-docmost-state'
@@ -24,11 +26,16 @@ require('lazy').setup(spec, {
   readme = { enabled = false },
   performance = { cache = { enabled = false }, rtp = { reset = false } },
 })
-assert(require('docmost.config').values == nil, 'Plugin should be lazy')
-require('lazy').load({ plugins = { 'docmost.nvim' } })
+assert(package.loaded['docmost.config'] == nil, 'Plugin should be lazy')
+vim.cmd('Docmost')
 assert(require('docmost.config').get().base_url == vim.env.DOCMOST_TEST_URL)
 assert(vim.fn.exists(':Docmost') == 2)
+local state = require('docmost.ui').state
+assert(state and vim.api.nvim_get_current_win() == state.list.win)
+assert(vim.bo.filetype == 'docmost')
+assert(vim.fn.hlexists('DocmostBrand') == 1)
+require('docmost.ui').close()
 vim.cmd('help docmost')
 assert(vim.bo.filetype == 'help')
-print('PASS installed lazy.nvim loads NvChad spec, configuration, command and help')
+print('PASS installed lazy.nvim loads NvChad spec, workspace command, configuration and help')
 vim.cmd('qa!')

@@ -14,6 +14,23 @@ end
 local function fail(message, kind)
   return { message = message, kind = kind or 'state' }
 end
+local function set(s, status)
+  s.status = status
+  if status == 'verified' then
+    s.verified_at = os.time()
+  end
+  if valid(s) then
+    vim.b[s.buf].docmost_status = status
+  end
+  vim.api.nvim_exec_autocmds(
+    'User',
+    { pattern = 'DocmostPageStatus', modeline = false, data = { id = s.id } }
+  )
+  if #vim.api.nvim_list_uis() > 0 then
+    vim.cmd('redrawstatus!')
+  end
+end
+M.set_status = set
 
 function M.current(buf)
   buf = (not buf or buf == 0) and vim.api.nvim_get_current_buf() or buf
@@ -33,7 +50,7 @@ local function backup(s, snapshot)
   return false
 end
 
-local function attach(s, markdown, modified)
+local function attach(s, markdown, modified, target_win)
   local c = require('docmost.config').get()
   if s.buf and vim.api.nvim_buf_is_valid(s.buf) and not vim.api.nvim_buf_is_loaded(s.buf) then
     vim.api.nvim_buf_delete(s.buf, { force = true })
@@ -74,10 +91,13 @@ local function attach(s, markdown, modified)
       end
     end,
   })
-  vim.api.nvim_set_current_buf(buf)
+  if vim.api.nvim_win_is_valid(target_win) then
+    vim.api.nvim_win_set_buf(target_win, buf)
+  end
 end
 
 function M.open(input, cb)
+  local target_win = vim.api.nvim_get_current_win()
   cb = cb
     or function(err)
       if err then
@@ -91,12 +111,14 @@ function M.open(input, cb)
   end
   local function reuse(s)
     if valid(s) then
-      vim.api.nvim_set_current_buf(s.buf)
+      if vim.api.nvim_win_is_valid(target_win) then
+        vim.api.nvim_win_set_buf(target_win, s.buf)
+      end
     elseif s.busy then
       cb(fail('Page operation still running; reopen after it completes'))
       return true
     elseif s.detached_modified or s.pending then
-      attach(s, s.snapshot, true)
+      attach(s, s.snapshot, true, target_win)
     else
       if s.buf and vim.api.nvim_buf_is_valid(s.buf) then
         vim.api.nvim_buf_delete(s.buf, { force = true })
@@ -123,18 +145,19 @@ function M.open(input, cb)
     if M.states[page.id] and reuse(M.states[page.id]) then
       return
     end
-    local s = { id = page.id, baseline = page, status = 'opened' }
+    local s = { id = page.id, baseline = page }
     M.states[s.id] = s
-    attach(s, page.markdown, false)
+    attach(s, page.markdown, false, target_win)
+    set(s, 'opened')
     if not page.editable then
-      notify('Read-only: ' .. page.reason, vim.log.levels.WARN)
+      notify('Read-only: ' .. require('docmost.status').explain(page.reason), vim.log.levels.WARN)
     end
     cb(nil, s)
   end)
 end
 
 local function verified(s, remote, snapshot, tick)
-  s.baseline, s.pending, s.remote, s.status = remote, nil, nil, 'verified'
+  s.baseline, s.pending, s.remote = remote, nil, nil
   s.saved_snapshot = snapshot
   M.compatibility = 'HTTP body persistence observed'
   if valid(s) then
@@ -146,6 +169,7 @@ local function verified(s, remote, snapshot, tick)
   else
     s.detached_modified = s.snapshot ~= snapshot
   end
+  set(s, 'verified')
   if not remote.editable then
     notify('Saved page is now read-only: ' .. remote.reason, vim.log.levels.WARN)
   end
@@ -157,7 +181,7 @@ local function verify(s, done)
   local matches, previous = 0, nil
   local pending = s.pending
   local function uncertain(err)
-    s.status = 'save outcome uncertain'
+    set(s, 'save outcome uncertain')
     if valid(s) then
       vim.bo[s.buf].modified = true
     end
@@ -240,9 +264,9 @@ function M.save(buf, cb)
   cb = cb
     or function(err, result)
       if err then
-        notify(err.message, vim.log.levels.ERROR)
+        notify(require('docmost.status').explain(err.message), vim.log.levels.ERROR)
       elseif result == 'noop' then
-        notify('No changes')
+        notify('No changes to save')
       else
         notify('Save verified by repeated read-back')
       end
@@ -251,6 +275,17 @@ function M.save(buf, cb)
   if not s then
     cb(fail('Not a Docmost buffer'))
     return
+  end
+  local reply = cb
+  cb = function(err, result)
+    if not (err and err.message == 'A page operation is already pending') then
+      s.last_error = err and err.message or nil
+      vim.api.nvim_exec_autocmds(
+        'User',
+        { pattern = 'DocmostPageStatus', modeline = false, data = { id = s.id } }
+      )
+    end
+    reply(err, result)
   end
   if s.busy then
     cb(fail('A page operation is already pending'))
@@ -289,26 +324,28 @@ function M.save(buf, cb)
     cb(fail('Private backup failed; save was not sent'))
     return
   end
-  s.busy, s.snapshot, s.status = true, snapshot, 'checking remote'
+  s.busy, s.snapshot = true, snapshot
+  set(s, 'checking remote')
   local function done(err, result)
     s.busy, s.request = false, nil
     cb(err, result)
   end
   local function preflight(prepared)
-    s.status = 'checking remote'
+    set(s, 'checking remote')
     s.request = api.read(s.id, function(err, remote)
       if s.cancelled then
-        s.status = 'preflight cancelled'
+        set(s, 'preflight cancelled')
         done(fail('Save cancelled before update', 'cancelled'))
         return
       end
       if err then
-        s.status = 'preflight failed'
+        set(s, 'preflight failed')
         done(err)
         return
       end
       if not api.same(s.baseline, remote) then
-        s.remote, s.status = remote, 'conflict'
+        s.remote = remote
+        set(s, 'conflict')
         done(
           fail(
             'Remote page changed; save blocked. Use :Docmost diff for base/local/remote, then explicitly reload and merge.',
@@ -322,7 +359,7 @@ function M.save(buf, cb)
         return
       end
       s.pending = { markdown = snapshot, tick = tick, before = s.baseline, json = prepared }
-      s.status = 'saving'
+      set(s, 'saving')
       if not backup(s, content(s)) then
         s.pending = nil
         done(fail('Could not record pending write; save was not sent'))
@@ -340,18 +377,19 @@ function M.save(buf, cb)
             or update_error.status == 429
           )
         then
-          s.pending, s.status = nil, 'save rejected'
+          s.pending = nil
+          set(s, 'save rejected')
           done(update_error)
           return
         end
-        s.status = 'verifying'
+        set(s, 'verifying')
         verify(s, done)
       end, prepared)
     end)
   end
   local markdown = require('docmost.markdown')
   if markdown.needed(s.baseline.json) then
-    s.status = 'parsing Markdown'
+    set(s, 'parsing Markdown')
     s.request = markdown.parse(s.baseline.markdown, function(base_error, parsed_base)
       if base_error or s.cancelled or not valid(s) then
         done(base_error or fail('Save cancelled before update', 'cancelled'))
@@ -364,7 +402,7 @@ function M.save(buf, cb)
         end
         local prepared, reason = markdown.prepare(s.baseline, parsed_base, parsed_edit)
         if not prepared then
-          s.status = 'conversion blocked'
+          set(s, 'conversion blocked')
           done(fail(reason, 'fidelity'))
           return
         end
@@ -433,10 +471,10 @@ function M.reload(force, cb)
     )
     vim.bo[s.buf].modified, vim.bo[s.buf].readonly, vim.bo[s.buf].modifiable =
       false, not remote.editable, remote.editable
-    s.baseline, s.pending, s.remote, s.status, s.snapshot =
-      remote, nil, nil, 'reloaded', remote.markdown
-    s.saved_snapshot = nil
+    s.baseline, s.pending, s.remote, s.snapshot = remote, nil, nil, remote.markdown
+    s.saved_snapshot, s.last_error = nil, nil
     vim.b[s.buf].docmost_title = remote.meta.title
+    set(s, 'reloaded')
     cb(nil, remote)
   end)
 end

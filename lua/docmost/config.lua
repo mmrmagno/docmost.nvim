@@ -14,6 +14,16 @@ function M.setup(opts)
     state_dir = vim.fn.stdpath('state') .. '/docmost',
     persist_session = false,
     allow_insecure_localhost = false,
+    ui = {
+      width = 0.9,
+      height = 0.86,
+      border = 'rounded',
+      icons = 'unicode',
+      preview = true,
+      winbar = true,
+      search_debounce_ms = 250,
+      preview_debounce_ms = 150,
+    },
   }, opts or {})
   c.base_url = c.base_url:gsub('/+$', '')
   local scheme, authority = c.base_url:match('^(https?)://([^/]+)$')
@@ -39,6 +49,31 @@ function M.setup(opts)
   end
   assert(c.verify_reads >= 2, 'docmost: verification requires at least two reads')
   assert(c.page_size <= 100, 'docmost: page_size must be <= 100')
+  for _, key in ipairs({ 'width', 'height' }) do
+    local value = c.ui[key]
+    assert(
+      type(value) == 'number' and value > 0 and (value <= 1 or value % 1 == 0),
+      'docmost: ui.' .. key .. ' must be a positive fraction or integer'
+    )
+  end
+  assert(
+    vim.tbl_contains({ 'none', 'single', 'double', 'rounded', 'solid', 'shadow' }, c.ui.border),
+    'docmost: invalid ui.border'
+  )
+  assert(
+    c.ui.icons == 'unicode' or c.ui.icons == 'ascii',
+    "docmost: ui.icons must be 'unicode' or 'ascii'"
+  )
+  for _, key in ipairs({ 'preview', 'winbar' }) do
+    assert(type(c.ui[key]) == 'boolean', 'docmost: ui.' .. key .. ' must be a boolean')
+  end
+  for _, key in ipairs({ 'search_debounce_ms', 'preview_debounce_ms' }) do
+    local value = c.ui[key]
+    assert(
+      type(value) == 'number' and value >= 0 and value % 1 == 0,
+      'docmost: ui.' .. key .. ' must be a non-negative integer'
+    )
+  end
   assert(
     not c.session_token or type(c.session_token) == 'function',
     'docmost: session_token must be a function'

@@ -88,8 +88,114 @@ are ignored. A `session_token` provider takes precedence over session files.
 
 ## Use
 
+### The workspace
+
+Run `:Docmost`. A floating workspace opens over the editor: a tree of your spaces
+and pages on the left and a read-only preview of the selected page on the right.
+It uses your colour scheme (NvChad's base46 themes included) and needs no icon
+font or extra plugin. Press `?` at any time for the full key list.
+
+```
+╭ docmost  docs.example.com  ● signed in ─╮╭ Engineering › Runbooks › Backups ─────╮
+│ OPEN PAGES                              ││ Backups                               │
+│ ● Weekly notes                  unsaved ││                                       │
+│                                         ││ ● Editable in Neovim                  │
+│ SPACES                                  ││ Close the browser editor for this     │
+│ ▾ Engineering                           ││ page before saving here.              │
+│   ▾ Runbooks                            ││ ───────────────────────────────────── │
+│     · Backups                           ││ # Backups                             │
+│     + Load more                         ││ ...                                   │
+│ ▸ Personal                              ││                                       │
+╰ ⏎ open  l/h tree  / search  p preview  ─╯╰─────────────────── read-only preview ╯
+```
+
+- **Signing in.** Signed out, the tree shows a short card. Press `a`, type your
+  email, then your password in Neovim's secret prompt. Spaces load as soon as the
+  session is valid. The title shows `signed in`, `session expired` or `signed out`;
+  an expired session adds a banner and your open pages keep their edits.
+- **Browsing.** `l` expands a space or page and fetches its children only then,
+  `h` collapses or jumps to the parent, `-` collapses back to the space. Each level
+  has its own **Load more** row. Errors appear under the node that failed; `r`
+  retries it.
+- **Opening.** Enter opens the page as a normal Markdown buffer in the window you
+  came from; `Ctrl-v`, `Ctrl-x` and `Ctrl-t` open it in a vertical split,
+  horizontal split or new tab. The workspace closes, and `:Docmost` brings it back
+  exactly where you left it: same expanded nodes, selection and scroll.
+- **Open pages.** Pages you have open appear at the top with their state
+  (`unsaved`, `saving`, `verified 14:05`, `conflict`, `uncertain`, `read-only`).
+  `w` saves and verifies the selected open page (or the page you came from), `R`
+  reloads a clean page, `d` opens the base/local/remote diff.
+- **Search.** `/` opens a query line above the tree. Results update as you type,
+  after a short pause; an older request is cancelled and a late reply is ignored.
+  Enter or Down moves to the results, `/` edits the query again, Esc returns to the
+  tree with your previous selection, and `Ctrl-c` clears the search from the query.
+- **Preview.** Moving onto a page shows its title, whether it is editable (or why
+  not, in plain language), the state of its open buffer and the page body. It is a
+  separate scratch buffer, never your page buffer, and results are cached for the
+  session. `p` hides it. On narrow screens the list takes the full width and `p`
+  swaps to the preview and back. `ui.preview = false` stops remote preview reads.
+- **Actions.** `.` lists everything available for the selected row: open variants,
+  child pages, refresh, copy page ID, save, reload and diff.
+- **Focus.** `q` or Esc closes the workspace. Moving to another editor window
+  closes it too; Neovim's own prompts and pickers do not.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows, `gg` / `G` | Move between rows |
+| Enter | Open page, expand or collapse space, run the selected action |
+| `l` / `h` / `-` | Expand children / collapse or go to parent / collapse to the space |
+| `Ctrl-v` / `Ctrl-x` / `Ctrl-t` | Open in vertical split / horizontal split / tab |
+| `/` | Search (Esc from results returns to the tree) |
+| `p` | Show or hide the preview (swap on narrow screens) |
+| `r` | Refresh or retry the selected row |
+| `.` | Actions for the selected row |
+| `o` | Open a page by URL or ID |
+| `a` / `L` | Sign in with a secret prompt / sign out locally |
+| `w` / `R` / `d` | Save and verify / safe reload / diff for an open page |
+| `?` / `q` | Help / close |
+
+In NvChad you can bind the workspace to a key in `lua/mappings.lua`:
+
+```lua
+vim.keymap.set('n', '<leader>dm', '<cmd>Docmost<cr>', { desc = 'Docmost workspace' })
+```
+
+### Editing pages
+
+Pages are ordinary Markdown buffers: normal motions, undo and `:write` all work.
+The window's winbar shows the page title, whether it is editable, the save state
+and a one-line hint, for example `docmost  Backups · editable · verifying    Reading
+back until two fresh reads match`. `b:docmost_status` holds the raw state for your
+own statusline. `ui.winbar = false` turns the winbar off; a winbar you set yourself
+is never replaced.
+
+| State | Meaning |
+| --- | --- |
+| `unsaved` | Local edits. `:w` saves and verifies. |
+| `checking`, `preparing`, `saving`, `verifying` | A save is running. Keep editing if you like; new edits stay unsaved. |
+| `verified 14:05` | Two fresh reads matched what you wrote. |
+| `conflict` | The page changed on the server. Nothing was written. `:Docmost diff`, then reload and merge. |
+| `uncertain` | The server did not confirm the save. `:w` checks again by reading and never resends. |
+| `rejected`, `not saved`, `blocked` | Nothing was persisted. The hint explains why; edits are kept. |
+| `read-only` | The page contains something Neovim cannot save safely. The hint names it. |
+
+Tips (also in `:Docmost guide`):
+
+- Add blocks by writing new Markdown blocks separated by a blank line. If you also
+  changed text nearby, save the text first, then add or remove blocks and save
+  again, so existing block IDs stay attached.
+- Tables, images, attachments, task lists, callouts and other rich content keep a
+  page read-only. Do not override that with `:set modifiable`; edit those pages in
+  the browser.
+- A `#` heading changes the body, not the page title. Creating pages is not
+  implemented yet.
+- Close the browser editor for a page before editing it here, and try a disposable
+  page first.
+
 | Command | Behavior |
 | --- | --- |
+| `:Docmost` / `:Docmost ui` | Open the workspace, or return to it |
+| `:Docmost guide` | Editing tips in a small floating window |
 | `:Docmost login` / `logout` | Local session login/logout |
 | `:Docmost spaces` | Choose a space, root page, then open it or browse its children |
 | `:Docmost search [query]` | Search, prompting if no query was provided |
@@ -103,7 +209,8 @@ are ignored. A `session_token` provider takes precedence over session files.
 | `:Docmost version` | Query the optional deployment version endpoint |
 | `:checkhealth docmost` | Check local requirements/configuration, with no remote mutations |
 
-Pickers use `vim.ui.select`/`vim.ui.input`, including NvChad's configured provider.
+The explicit `spaces` and `search` commands also provide compact pickers using
+`vim.ui.select`/`vim.ui.input`, including NvChad's configured provider.
 Choose **Load more…** for another batch. Spaces and sidebar pages use cursors;
 search uses offsets. Children are fetched only when requested. Search may offer
 one final empty batch because the endpoint supplies no total count.
@@ -226,6 +333,16 @@ require('docmost').setup({
   backup_retention = 20, -- per page, at least one
   state_dir = vim.fn.stdpath('state') .. '/docmost',
   persist_session = false,
+  ui = {
+    width = 0.9, -- fraction of the screen, or cells
+    height = 0.86,
+    border = 'rounded', -- none, single, double, rounded, solid, shadow
+    icons = 'unicode', -- plain geometric characters; 'ascii' for any font
+    preview = true, -- false: no remote reads for the preview pane
+    winbar = true, -- page state in page windows
+    search_debounce_ms = 250,
+    preview_debounce_ms = 150,
+  },
   -- session_token = function() return vim.env.DOCMOST_SESSION_TOKEN end,
   -- session_file = '/absolute/private/session.json',
 })
@@ -233,14 +350,23 @@ require('docmost').setup({
 
 Restart Neovim to change configuration with pages open. Keep state outside the
 repository. Backups can contain private page content.
+Workspace width/height accept screen fractions up to 1 or integer cell counts. It is
+clamped to the screen and re-laid out on resize: two panes from about 107 columns,
+one pane below that, and a compact single pane on very small screens.
+Highlight groups start with `Docmost` (for example `DocmostBrand`,
+`DocmostSelection`, `DocmostSection`) and link to standard groups, so any colour
+scheme styles them; override them after your colour scheme loads.
 
 ## Tests and live verification
 
-Validation on 2026-09-28: **188 HTTP/HTTPS integration assertions and 38 real-Pandoc
-adapter assertions passed** on Neovim 0.12.5, including TLS rejection/trust checks and saves retaining
-block IDs. The local spec also loaded successfully using
-the installed lazy.nvim 11.17.5, including configuration, command, and help. StyLua
-checks and local health/help checks passed. No production compatibility is claimed.
+Validation on 2026-09-28: **188 HTTP/HTTPS integration assertions, 38 real-Pandoc
+adapter assertions, 29 layout assertions and 166 workspace assertions passed** on
+Neovim 0.12.5, including TLS rejection/trust checks and saves retaining block IDs.
+The local spec also loaded successfully using the installed lazy.nvim 11.17.5,
+including configuration, command, highlights and help. The workspace was also
+inspected rendered in a real terminal at several sizes, in ASCII mode, and inside
+NvChad. StyLua checks and local health/help checks passed. No production
+compatibility is claimed.
 
 Run the loopback-only suite (Neovim, curl, Pandoc, Python 3.9+, and OpenSSL CLI required):
 
@@ -255,6 +381,12 @@ never reads your real session or contacts production. It tests TLS validation,
 cookie login, pagination/navigation, redacted errors, consistent reads, replacement
 and reopen, delayed/ignored updates, empty/null bodies, conflicts, read-only gates,
 changedtick behavior, cancellation, closed buffers, timeouts, and session expiry.
+Workspace checks cover window ownership and focus, secret prompts, per-node
+pagination and on-demand children, restored selection and scroll, debounced and
+cancelled search with stale replies ignored, cached and stale-safe previews,
+wide/narrow/tiny layouts, expired sessions, winbar and badge states through a
+verified save, plain-language restrictions, and edits kept through logout and
+failures.
 The mock is **not a full Markdown/Yjs implementation**.
 
 To also exercise the example using an already installed lazy.nvim (no downloads),

@@ -10,6 +10,9 @@ no enterprise API key. Internal endpoints vary by Docmost release. The installed
 deployment is not yet live-verified. See README.md for NvChad/lazy.nvim setup.
 
                                                             *docmost-commands*
+:Docmost                Open the workspace, or return to where you left it.
+:Docmost ui             Same as :Docmost.
+:Docmost guide          Editing tips in a small floating window.
 :Docmost login          Email input and a local secret password prompt.
 :Docmost logout         Forget local session; does not revoke browser sessions.
 :Docmost spaces         Select space, page, or children. Load more for pagination.
@@ -27,6 +30,74 @@ deployment is not yet live-verified. See README.md for NvChad/lazy.nvim setup.
 Command completion is available. Title is separate from body. The first heading
 does not rename a page. Buffers are named docmost://host/page-id. Use :write and
 wait before :quit; :wq is not an asynchronous save-and-quit operation.
+
+                                                          *docmost-workspace*
+:Docmost opens a floating workspace: a tree of spaces and pages, and a read-only
+preview of the selection. It follows your colour scheme and needs no icon font.
+The title shows the session: signed in, session expired or signed out.
+
+  j/k, arrows, gg/G    Move between rows.
+  Enter                Open page, expand/collapse space, run selected action.
+  l / h / -            Expand children / collapse or parent / back to space.
+  CTRL-V CTRL-X CTRL-T Open in vertical split / horizontal split / tab.
+  /                    Search. Results update as you type.
+  p                    Show or hide the preview; on narrow screens, swap to it.
+  r                    Refresh or retry the selected row.
+  .                    Actions for the selected row (vim.ui.select).
+  o                    Open a page by URL or ID.
+  a / L                Sign in via a secret prompt / sign out locally.
+  w / R / d            Save and verify / safe reload / diff an open page.
+  ? / q / Esc          Help / close. Esc in search results returns to the tree.
+
+Children load only when expanded, each level has its own Load more row, and
+errors appear under the node that failed. Opening a page closes the workspace
+and uses the window you came from; :Docmost restores the same expansion,
+selection and scroll. Moving to another editor window also closes it.
+
+Pages you have open are listed first with their save state. w, R and d act on
+the selected open page, or on the page you opened the workspace from.
+
+Search: / opens a query line. Typing waits for a short pause, cancels older
+requests and ignores late replies. Enter or Down goes to results. Esc returns
+to the tree with the previous selection. CTRL-C in the query clears it.
+
+Preview: a separate scratch buffer, never the page buffer. It shows whether the
+page is editable (or why not), the open buffer's state and the body. Previews
+are cached for the session. ui.preview=false disables remote preview reads.
+
+                                                            *docmost-editing*
+Pages are ordinary Markdown buffers. The winbar shows title, editable or
+read-only, the save state and a hint. b:docmost_status holds the raw state.
+  unsaved            Local edits; :w saves and verifies.
+  checking, preparing, saving, verifying
+                     A save is running; new edits stay unsaved.
+  verified HH:MM     Two fresh reads matched what you wrote.
+  conflict           Remote changed, nothing written. :Docmost diff.
+  uncertain          Not confirmed. :w checks again by reading; never resends.
+  rejected, not saved, blocked
+                     Nothing persisted; the hint explains why.
+  read-only          Content Neovim cannot save safely; the hint names it.
+
+Add blocks by writing new Markdown blocks separated by a blank line. If you
+also changed text nearby, save the text first, then add or remove blocks in a
+separate save. Tables, images, attachments, task lists and other rich content
+keep a page read-only; do not override it with :set modifiable. A heading
+changes the body, not the title. Creating pages is not implemented. Close the
+browser editor first, and try a disposable page before real documents.
+
+                                                          *docmost-ui-options*
+  ui = {
+    width = 0.9, height = 0.86,    fraction of the screen or cells
+    border = 'rounded',            none single double rounded solid shadow
+    icons = 'unicode',             or 'ascii' for any font
+    preview = true,                false: no remote preview reads
+    winbar = true,                 page state in page windows
+    search_debounce_ms = 250,
+    preview_debounce_ms = 150,
+  }
+Two panes from about 107 columns, one pane below, compact on tiny screens.
+Highlight groups start with Docmost (DocmostBrand, DocmostSelection, ...) and
+link to standard groups. Override them after your colour scheme loads.
 
                                                                 *docmost-auth*
 Login cookies are retained in memory by default. Passwords and tokens are sent to

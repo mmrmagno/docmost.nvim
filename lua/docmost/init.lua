@@ -1,5 +1,6 @@
 local M = {}
 local commands = {
+  'ui',
   'login',
   'logout',
   'spaces',
@@ -11,6 +12,7 @@ local commands = {
   'diff',
   'cancel',
   'version',
+  'guide',
 }
 local function report(err, message)
   vim.notify(
@@ -30,7 +32,14 @@ function M.setup(opts)
   require('docmost.config').setup(opts)
   require('docmost.auth').reset()
   M.register()
+  require('docmost.highlights').setup()
   local group = vim.api.nvim_create_augroup('DocmostLifecycle', { clear = true })
+  vim.api.nvim_create_autocmd({ 'BufWinEnter', 'WinEnter' }, {
+    group = group,
+    callback = function()
+      vim.schedule(require('docmost.status').sweep)
+    end,
+  })
   vim.api.nvim_create_autocmd('VimLeavePre', {
     group = group,
     callback = function()
@@ -40,19 +49,25 @@ function M.setup(opts)
   })
 end
 
-function M.login()
+function M.login(callback)
+  callback = callback
+    or function(err)
+      if not err or err.kind ~= 'cancelled' then
+        report(err, 'Authenticated')
+      end
+    end
   vim.ui.input({ prompt = 'Docmost email: ' }, function(email)
     if not email or email == '' then
+      callback({ kind = 'cancelled', message = 'Login cancelled' })
       return
     end
     -- vim.ui.input has no portable secret mode (including NvChad providers).
     local ok, password = pcall(vim.fn.inputsecret, 'Docmost password: ')
     if not ok or password == '' then
+      callback({ kind = 'cancelled', message = 'Login cancelled' })
       return
     end
-    require('docmost.auth').login(email, password, function(err)
-      report(err, 'Authenticated')
-    end)
+    require('docmost.auth').login(email, password, callback)
     password = nil
   end)
 end
@@ -64,10 +79,8 @@ function M.status()
       .. '; '
       .. require('docmost.buffer').compatibility
     if s then
-      message = message
-        .. '; page: '
-        .. s.status
-        .. (s.baseline.reason and '; read-only: ' .. s.baseline.reason or '')
+      local d = require('docmost.status').describe(s)
+      message = message .. '; page: ' .. d.label .. (d.hint and ('. ' .. d.hint) or '')
     end
     report(err, message)
   end)
@@ -78,12 +91,14 @@ function M.register()
     local action, rest = args.args:match('^(%S*)%s*(.-)$')
     local ok, err = pcall(function()
       require('docmost.config').get()
-      if action == 'login' then
+      if action == '' or action == 'ui' then
+        require('docmost.ui').open()
+      elseif action == 'login' then
         M.login()
       elseif action == 'logout' then
         require('docmost.auth').logout()
         report(nil, 'Logged out locally; external session sources are unchanged')
-      elseif action == 'spaces' or action == '' then
+      elseif action == 'spaces' then
         require('docmost.picker').spaces()
       elseif action == 'search' then
         require('docmost.picker').search(rest)
@@ -104,6 +119,8 @@ function M.register()
         end
       elseif action == 'cancel' then
         require('docmost.buffer').cancel()
+      elseif action == 'guide' then
+        require('docmost.ui').guide()
       elseif action == 'version' then
         require('docmost.api').post('/version', {}, function(e, data)
           if not e and (type(data) ~= 'table' or type(data.currentVersion) ~= 'string') then

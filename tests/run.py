@@ -134,11 +134,15 @@ class Handler(BaseHTTPRequestHandler):
         if route in ['/spaces', '/pages/sidebar-pages', '/search']:
             state['trace'].append([route, body])
             if route == '/search':
-                items = [{'id': f"search-{body.get('offset', 0)}", 'title': 'Result'}] if body.get('offset', 0) < 4 else []
+                if mode == 'slowsearch':
+                    time.sleep(.3)
+                items = [{'id': f"search-{body.get('offset', 0)}", 'title': 'Result', 'space': {'id': 'space-1', 'name': 'Engineering'}}] \
+                    if body.get('offset', 0) < 4 and body.get('query') != 'nothing' else []
                 return self.send({'data': {'items': items}})
             cursor = body.get('cursor')
             name = 'Child' if body.get('pageId') else 'Root'
-            items = [{'id': f'{name.lower()}-{2 if cursor else 1}', 'title': name, 'name': name}]
+            items = [{'id': f'{name.lower()}-{2 if cursor else 1}', 'title': name, 'name': name,
+                      'slug': name.lower(), 'hasChildren': not body.get('pageId')}]
             return self.send({'data': {'items': items, 'meta': {'nextCursor': None if cursor else 'next', 'hasNextPage': not bool(cursor)}}})
         if route == '/pages/info':
             state['reads'] += 1
@@ -209,12 +213,16 @@ def main():
                    NO_PROXY='127.0.0.1', no_proxy='127.0.0.1')
         for kind in ['CONFIG', 'DATA', 'STATE', 'CACHE']:
             env[f'XDG_{kind}_HOME'] = f'{directory}/xdg-{kind.lower()}'
-        parser_test = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
-                                     '-l', str(ROOT / 'tests/markdown.lua')], env=env, cwd=ROOT, timeout=30)
-        if parser_test.returncode:
-            raise SystemExit(parser_test.returncode)
+        for unit in ['tests/markdown.lua', 'tests/layout.lua']:
+            unit_test = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
+                                        '-l', str(ROOT / unit)], env=env, cwd=ROOT, timeout=30)
+            if unit_test.returncode:
+                raise SystemExit(unit_test.returncode)
         result = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
                                  '-l', str(ROOT / 'tests/integration.lua')], env=env, cwd=ROOT, timeout=90)
+        if result.returncode == 0:
+            result = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
+                                     '-l', str(ROOT / 'tests/ui.lua')], env=env, cwd=ROOT, timeout=45)
         if result.returncode == 0:
             result = subprocess.run(['nvim', '--headless', '-u', 'NONE', '-i', 'NONE', '--cmd', f'set rtp+={ROOT}',
                                      '-l', str(ROOT / 'tests/lazy.lua')], env=env, cwd=ROOT, timeout=30)

@@ -40,7 +40,7 @@ function M.expire()
 end
 
 function M.validate(cb)
-  require('docmost.http').post('/users/me', {}, M.token(), function(err, data)
+  return require('docmost.http').post('/users/me', {}, M.token(), function(err, data)
     local user = type(data) == 'table' and (data.user or data) or nil
     if not err and (type(user) ~= 'table' or type(user.id) ~= 'string') then
       err = { kind = 'contract', message = 'Invalid current-user response; session not validated' }

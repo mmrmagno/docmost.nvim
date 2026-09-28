@@ -29,6 +29,15 @@ function M.check()
   vim.health.info(
     'Private backups: ' .. c.state_dir .. '; retained per page: ' .. c.backup_retention
   )
+  vim.health.info(
+    string.format(
+      'Workspace: icons=%s, preview=%s, winbar=%s, border=%s',
+      c.ui.icons,
+      tostring(c.ui.preview),
+      tostring(c.ui.winbar),
+      c.ui.border
+    )
+  )
   vim.health.warn('Internal endpoints; use one active editor per page. No atomic compare-and-swap.')
 end
 return M
